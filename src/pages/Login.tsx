@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { UserCircle } from "lucide-react";
 
 const Login = () => {
   const [email, setEmail] = useState("");
@@ -47,6 +48,10 @@ const Login = () => {
     }
   };
 
+  const handleGuestMode = () => {
+    navigate("/?guest=true");
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <Card className="w-full max-w-md">
@@ -54,6 +59,26 @@ const Login = () => {
           <CardTitle className="text-2xl text-center">Login</CardTitle>
         </CardHeader>
         <CardContent>
+          <div className="mb-6">
+            <Button 
+              variant="outline" 
+              className="w-full" 
+              onClick={handleGuestMode}
+            >
+              <UserCircle className="mr-2" />
+              Continue as Guest
+            </Button>
+          </div>
+          <div className="relative mb-6">
+            <div className="absolute inset-0 flex items-center">
+              <span className="w-full border-t" />
+            </div>
+            <div className="relative flex justify-center text-xs uppercase">
+              <span className="bg-background px-2 text-muted-foreground">
+                Or continue with email
+              </span>
+            </div>
+          </div>
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
