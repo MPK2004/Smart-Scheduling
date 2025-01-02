@@ -9,6 +9,8 @@ import { Event } from "@/types/event";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { useEventManager } from "@/components/EventManager";
+import { UserCircle } from "lucide-react";
+import { toast } from "sonner";
 
 const Index = () => {
   const navigate = useNavigate();
@@ -18,6 +20,8 @@ const Index = () => {
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [guestEvents, setGuestEvents] = useState<Event[]>([]);
+  const [isGuestMode, setIsGuestMode] = useState(false);
 
   const { events, addEvent, updateEvent, deleteEvent } = useEventManager();
 
@@ -30,13 +34,41 @@ const Index = () => {
     navigate("/login");
   };
 
+  const handleGuestMode = () => {
+    setIsGuestMode(true);
+    toast.success("Entered guest mode - events will not be saved");
+  };
+
+  const handleGuestAddEvent = (newEvent: Omit<Event, "id">) => {
+    const guestEvent = {
+      ...newEvent,
+      id: crypto.randomUUID(),
+    };
+    setGuestEvents((prev) => [...prev, guestEvent]);
+    toast.success("Event added (guest mode)");
+  };
+
+  const handleGuestUpdateEvent = (updatedEvent: Event) => {
+    setGuestEvents((prev) =>
+      prev.map((event) => (event.id === updatedEvent.id ? updatedEvent : event))
+    );
+    toast.success("Event updated (guest mode)");
+  };
+
+  const handleGuestDeleteEvent = (eventId: string) => {
+    setGuestEvents((prev) => prev.filter((event) => event.id !== eventId));
+    toast.success("Event deleted (guest mode)");
+  };
+
   const getEventsForDate = useCallback((date: Date | undefined) => {
     if (!date) return [];
     
     const localDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
     const dateStr = localDate.toLocaleDateString('en-CA');
     
-    return events
+    const currentEvents = isGuestMode ? guestEvents : events;
+    
+    return currentEvents
       .filter((event) => {
         const matchesDate = event.date === dateStr;
         const matchesSearch = event.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -47,7 +79,7 @@ const Index = () => {
         return matchesDate && matchesSearch && matchesCategory;
       })
       .sort((a, b) => a.time.localeCompare(b.time));
-  }, [events, searchQuery, selectedCategories]);
+  }, [events, guestEvents, searchQuery, selectedCategories, isGuestMode]);
 
   const handleEditClick = (event: Event) => {
     setSelectedEvent(event);
@@ -62,7 +94,14 @@ const Index = () => {
     );
   };
 
-  const categories = Array.from(new Set(events.map((event) => event.category).filter(Boolean))) as string[];
+  const categories = Array.from(
+    new Set(
+      (isGuestMode ? guestEvents : events)
+        .map((event) => event.category)
+        .filter(Boolean)
+    )
+  ) as string[];
+  
   const selectedDateEvents = getEventsForDate(date);
 
   return (
@@ -70,16 +109,24 @@ const Index = () => {
       <div className="max-w-7xl mx-auto">
         <div className="flex justify-between items-center mb-8">
           <h1 className="text-4xl font-bold">Smart Schedule</h1>
-          <Button variant="outline" onClick={handleLogout}>
-            Logout
-          </Button>
+          <div className="flex gap-4">
+            {!isGuestMode && (
+              <Button variant="outline" onClick={handleGuestMode}>
+                <UserCircle className="mr-2" />
+                Guest Mode
+              </Button>
+            )}
+            <Button variant="outline" onClick={handleLogout}>
+              Logout
+            </Button>
+          </div>
         </div>
         
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
           <EventCalendar
             date={date}
             onDateSelect={handleDateSelect}
-            events={events}
+            events={isGuestMode ? guestEvents : events}
           />
 
           <EventPanel
@@ -91,7 +138,7 @@ const Index = () => {
             onSearch={setSearchQuery}
             onCategoryToggle={handleCategoryToggle}
             onEditEvent={handleEditClick}
-            onDeleteEvent={deleteEvent}
+            onDeleteEvent={isGuestMode ? handleGuestDeleteEvent : deleteEvent}
           />
         </div>
 
@@ -100,14 +147,14 @@ const Index = () => {
         <AddEventDialog 
           open={isAddEventOpen} 
           onOpenChange={setIsAddEventOpen}
-          onSubmit={addEvent}
+          onSubmit={isGuestMode ? handleGuestAddEvent : addEvent}
           selectedDate={date}
         />
 
         <EditEventDialog
           open={isEditEventOpen}
           onOpenChange={setIsEditEventOpen}
-          onSubmit={updateEvent}
+          onSubmit={isGuestMode ? handleGuestUpdateEvent : updateEvent}
           event={selectedEvent}
         />
       </div>
