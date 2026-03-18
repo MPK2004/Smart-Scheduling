@@ -49,27 +49,32 @@ export const parseEventFromAI = async (
       throw new Error("No text could be extracted from input.");
     }
 
+    const todayStr = new Date().toLocaleDateString('en-CA');
+    
     // 2. Parse extracted text into structured JSON via Groq LLM
-    const basePrompt = `
-You are an expert scheduling assistant. Extract event details from the following input into a STRICT JSON object.
-IMPORTANT: Ignore any junk characters, menus, random symbols, or irrelevant text (especially from OCR). Focus ONLY on the core event details.
+    const systemPrompt = `
+You are an expert scheduling assistant. Your ONLY job is to extract event details and output an EXACT, valid JSON object.
+Context Information: Today's local date is ${todayStr}. Use this to exactly calculate actual dates for relative words like "today", "tomorrow", "Friday", "next week", etc.
 
-Use exactly these keys:
-- "title" (string, clean up any messy text into a short, clear title)
-- "date" (string, MUST be exactly YYYY-MM-DD format. If unknown or not found, return null)
-- "time" (string, MUST be exactly HH:MM in 24-hour time format. If unknown or not found, return null)
-- "description" (string, clean summary of any extra context. Do not include random junk characters. If none, return "")
-- "category" (string, pick one closest match: "work", "personal", "family", "health", "social", or "")
-- "recurrence" (string, one of: "none", "daily", "weekly", "monthly", "yearly", default to "none")
+Use EXACTLY these keys and formats:
+- "title": (string) A short, clean event title.
+- "date": (string) MUST be EXACTLY "YYYY-MM-DD". Calculate the date precisely. If totally unknown, return null.
+- "time": (string) MUST be EXACTLY "HH:MM" (24-hour time). E.g., "14:30" (2:30 PM), "09:00" (9 AM). If totally unknown, return null.
+- "description": (string) Clean summary. Remove any junk OCR characters, menus, random symbols. Return "" if none.
+- "category": (string) Best match: "work", "personal", "family", "health", "social", or "".
+- "recurrence": (string) "none", "daily", "weekly", "monthly", "yearly". Default "none".
 
-Input Text to Analyze:
-"""
-${textToParse}
-"""
+Return ONLY JSON. Do not add any text before or after the JSON.
 `;
 
+    const userPrompt = "Extract event details from this text:\\n" + textToParse;
+
+
     const completion = await groq.chat.completions.create({
-      messages: [{ role: "user", content: basePrompt }],
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
       model: "llama-3.1-8b-instant", // Fast logic model
       response_format: { type: "json_object" }, // Guarantee valid JSON
       temperature: 0,
@@ -78,19 +83,26 @@ ${textToParse}
     const jsonString = completion.choices[0]?.message?.content || "{}";
     const parsed = JSON.parse(jsonString);
     
+    console.log("AI Parsed Raw JSON:", parsed);
+
     // Strict sanitization to prevent "Invalid Date" crashes
-    const sanitizeNull = (val: any) => (val === "null" || val === "" || val === "undefined" ? null : val);
+    const sanitizeNull = (val: any) => {
+      if (!val || val === "null" || val === "" || val === "undefined") return null;
+      return String(val).trim();
+    };
     
     let finalDate = sanitizeNull(parsed.date);
     let finalTime = sanitizeNull(parsed.time);
 
-    // Validate format using regex, if it fails, set to null so the fallback UI triggers
-    if (finalDate && !/^\\d{4}-\\d{2}-\\d{2}$/.test(finalDate)) {
-      finalDate = null; 
+    // Remove any trailing seconds from time if Groq adds them (e.g. "14:30:00" -> "14:30")
+    if (finalTime && typeof finalTime === 'string') {
+      const parts = finalTime.split(':');
+      if (parts.length >= 2) {
+        finalTime = parts[0].padStart(2, '0') + ':' + parts[1].padStart(2, '0');
+      }
     }
-    if (finalTime && !/^\\d{2}:\\d{2}$/.test(finalTime)) {
-      finalTime = null;
-    }
+
+    console.log("Final Cleaned Date:", finalDate, "Time:", finalTime);
 
     return {
       title: parsed.title || "New AI Event",
