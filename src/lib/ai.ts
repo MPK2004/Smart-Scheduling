@@ -1,3 +1,6 @@
+import Groq from "groq-sdk";
+import Tesseract from "tesseract.js";
+
 export interface ParsedEvent {
   title: string;
   date: string | null;
@@ -7,35 +10,49 @@ export interface ParsedEvent {
   recurrence: string;
 }
 
-declare global {
-  interface Window {
-    puter: any;
-  }
-}
-
 export const parseEventFromAI = async (
   input: string | Blob,
   type: 'text' | 'image' | 'audio'
 ): Promise<ParsedEvent | null> => {
   try {
-    const puter = window.puter;
-    if (!puter) {
-      throw new Error("Puter.js not loaded. Make sure the script is in index.html");
+    const apiKey = import.meta.env.VITE_GROQ_API_KEY;
+    if (!apiKey) {
+      throw new Error("Missing VITE_GROQ_API_KEY in .env");
     }
+
+    const groq = new Groq({
+      apiKey,
+      dangerouslyAllowBrowser: true, // Required for running in Vite client
+    });
 
     let textToParse = "";
 
-    // Handle Audio (Speech-to-Text)
+    // 1. Extract raw text based on input type
     if (type === 'audio' && input instanceof Blob) {
+      // Audio transcription via Groq Whisper
       const file = new File([input], "audio.webm", { type: input.type || "audio/webm" });
-      const transcription = await puter.ai.speechToText(file);
-      textToParse = transcription?.text || transcription || "";
+      const transcription = await groq.audio.transcriptions.create({
+        file: file,
+        model: "whisper-large-v3-turbo",
+      });
+      textToParse = transcription.text;
+    } else if (type === 'image' && typeof input === 'string') {
+      // Image OCR via Tesseract.js directly in browser
+      // Note: input here is the base64 Data URL or blob URL
+      const { data } = await Tesseract.recognize(input, 'eng');
+      textToParse = data.text;
     } else if (type === 'text' && typeof input === 'string') {
       textToParse = input;
     }
 
+    if (!textToParse || textToParse.trim() === "") {
+      throw new Error("No text could be extracted from input.");
+    }
+
+    // 2. Parse extracted text into structured JSON via Groq LLM
     const basePrompt = `
-Extract event scheduling details from the following input into a STRICT JSON object with these precise keys (do not add any other keys):
+You are an expert scheduling assistant. Extract event details from the following input into a STRICT JSON object.
+Use these precise keys:
 - "title" (string, a short succinct title)
 - "date" (string, format YYYY-MM-DD, use null if not specified)
 - "time" (string, format HH:MM in 24-hour time, use null if not specified)
@@ -43,36 +60,20 @@ Extract event scheduling details from the following input into a STRICT JSON obj
 - "category" (string, pick one closest match: "work", "personal", "family", "health", "social", or empty string)
 - "recurrence" (string, one of: "none", "daily", "weekly", "monthly", "yearly", default to "none")
 
-Return ONLY the raw JSON object. Do not include markdown formatting like \`\`\`json.
+Input Text to Analyze:
+"""
+${textToParse}
+"""
 `;
 
-    let aiResponse: any;
+    const completion = await groq.chat.completions.create({
+      messages: [{ role: "user", content: basePrompt }],
+      model: "llama3-8b-8192", // Fast logic model
+      response_format: { type: "json_object" }, // Guarantee valid JSON
+      temperature: 0,
+    });
 
-    if (type === 'image' && typeof input === 'string') {
-      // For images, we pass the image data URL along with the prompt
-      aiResponse = await puter.ai.chat([
-        {
-          role: "user",
-          content: [
-            { type: "text", text: basePrompt + "\\nExtract details from the attached image." },
-            { type: "image_url", image_url: { url: input } }
-          ]
-        }
-      ]);
-    } else {
-      // For text and transcribed audio
-      const prompt = basePrompt + `\\nInput: ${textToParse}`;
-      aiResponse = await puter.ai.chat(prompt);
-    }
-
-    // Extract text from response (Puter chat might return a string or an object)
-    let jsonString = typeof aiResponse === 'string' 
-      ? aiResponse 
-      : (aiResponse?.message?.content || aiResponse?.text || JSON.stringify(aiResponse));
-
-    // Clean up markdown code blocks if the AI still included them
-    jsonString = jsonString.trim().replace(/^```json/i, '').replace(/^```/, '').replace(/```$/, '').trim();
-    
+    const jsonString = completion.choices[0]?.message?.content || "{}";
     const parsed = JSON.parse(jsonString);
     
     return {
