@@ -1,6 +1,7 @@
 import { Calendar } from "@/components/ui/calendar";
 import { Card } from "@/components/ui/card";
 import { Event } from "@/types/event";
+import { isEventOnDate } from "@/lib/dateUtils";
 
 interface EventCalendarProps {
   date: Date | undefined;
@@ -12,7 +13,7 @@ const EventCalendar = ({ date, onDateSelect, events }: EventCalendarProps) => {
   const getEventCountForDate = (date: Date) => {
     const localDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
     const dateStr = localDate.toLocaleDateString('en-CA');
-    return events.filter((event) => event.date === dateStr).length;
+    return events.filter((event) => isEventOnDate(event, dateStr)).length;
   };
 
   return (

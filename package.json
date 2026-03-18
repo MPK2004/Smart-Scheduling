@@ -46,6 +46,7 @@
     "@tanstack/react-query": "^5.56.2",
     "baseline-browser-mapping": "^2.10.8",
     "caniuse-lite": "^1.0.30001780",
+    "chrono-node": "^2.9.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^3.6.0",

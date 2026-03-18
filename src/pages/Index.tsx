@@ -8,8 +8,10 @@ import QuickActions from "@/components/QuickActions";
 import TextInputDialog from "@/components/TextInputDialog";
 import VoiceInputDialog from "@/components/VoiceInputDialog";
 import ImageUploadDialog from "@/components/ImageUploadDialog";
+import DeleteRecurringDialog from "@/components/DeleteRecurringDialog";
 import { Event } from "@/types/event";
 import { ParsedEvent } from "@/lib/ai";
+import { isEventOnDate } from "@/lib/dateUtils";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { useEventManager } from "@/components/EventManager";
@@ -26,6 +28,7 @@ const Index = () => {
   const [isImageUploadOpen, setIsImageUploadOpen] = useState(false);
   const [aiInitialData, setAiInitialData] = useState<Partial<Event> | undefined>(undefined);
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
+  const [eventToDelete, setEventToDelete] = useState<{ event: Event; targetDateStr: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [guestEvents, setGuestEvents] = useState<Event[]>([]);
@@ -68,10 +71,60 @@ const Index = () => {
     toast.success("Event deleted (guest mode)");
   };
 
+  const handleDeleteTrigger = (eventId: string) => {
+    const currentEvents = isGuestMode ? guestEvents : events;
+    const event = currentEvents.find((e) => e.id === eventId);
+    if (!event) return;
+
+    const recurStr = event.recurrence || "none";
+    if (recurStr !== "none" && date) {
+      const localDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+      const targetDateStr = localDate.toLocaleDateString('en-CA');
+      setEventToDelete({ event, targetDateStr });
+    } else {
+      isGuestMode ? handleGuestDeleteEvent(eventId) : deleteEvent(eventId);
+    }
+  };
+
+  const handleRecurringDeleteOption = (option: 'this' | 'future' | 'all') => {
+    if (!eventToDelete) return;
+    const { event, targetDateStr } = eventToDelete;
+    
+    if (option === 'all') {
+      isGuestMode ? handleGuestDeleteEvent(event.id) : deleteEvent(event.id);
+    } 
+    else if (option === 'this') {
+      let newRecur = event.recurrence || "none";
+      const exceptMatch = newRecur.match(/;except=([0-9,-]+)/);
+      if (exceptMatch) {
+         newRecur = newRecur.replace(exceptMatch[0], ";except=" + exceptMatch[1] + "," + targetDateStr);
+      } else {
+         newRecur += ";except=" + targetDateStr;
+      }
+      isGuestMode ? handleGuestUpdateEvent({ ...event, recurrence: newRecur }) : updateEvent({ ...event, recurrence: newRecur });
+    }
+    else if (option === 'future') {
+      let newRecur = event.recurrence || "none";
+      const untilMatch = newRecur.match(/;until=([0-9,-]+)/);
+      
+      const prevDate = new Date(targetDateStr);
+      prevDate.setDate(prevDate.getDate() - 1);
+      const prevDateStr = prevDate.toLocaleDateString('en-CA');
+
+      if (untilMatch) {
+         newRecur = newRecur.replace(untilMatch[0], ";until=" + prevDateStr);
+      } else {
+         newRecur += ";until=" + prevDateStr;
+      }
+      isGuestMode ? handleGuestUpdateEvent({ ...event, recurrence: newRecur }) : updateEvent({ ...event, recurrence: newRecur });
+    }
+    setEventToDelete(null);
+  };
+
   const handleAIParsed = (parsed: ParsedEvent) => {
     const today = new Date();
     const defaultDate = today.toLocaleDateString('en-CA');
-    
+
     const eventToSave = {
       title: parsed.title,
       date: parsed.date || defaultDate,
@@ -96,20 +149,20 @@ const Index = () => {
 
   const getEventsForDate = useCallback((date: Date | undefined) => {
     if (!date) return [];
-    
+
     const localDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
     const dateStr = localDate.toLocaleDateString('en-CA');
-    
+
     const currentEvents = isGuestMode ? guestEvents : events;
-    
+
     return currentEvents
       .filter((event) => {
-        const matchesDate = event.date === dateStr;
+        const matchesDate = isEventOnDate(event, dateStr);
         const matchesSearch = event.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                            event.description.toLowerCase().includes(searchQuery.toLowerCase());
-        const matchesCategory = selectedCategories.length === 0 || 
-                              (event.category && selectedCategories.includes(event.category));
-        
+          event.description.toLowerCase().includes(searchQuery.toLowerCase());
+        const matchesCategory = selectedCategories.length === 0 ||
+          (event.category && selectedCategories.includes(event.category));
+
         return matchesDate && matchesSearch && matchesCategory;
       })
       .sort((a, b) => a.time.localeCompare(b.time));
@@ -135,7 +188,7 @@ const Index = () => {
         .filter(Boolean)
     )
   ) as string[];
-  
+
   const selectedDateEvents = getEventsForDate(date);
 
   return (
@@ -155,7 +208,7 @@ const Index = () => {
             </Button>
           </div>
         </div>
-        
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
           <EventCalendar
             date={date}
@@ -172,22 +225,22 @@ const Index = () => {
             onSearch={setSearchQuery}
             onCategoryToggle={handleCategoryToggle}
             onEditEvent={handleEditClick}
-            onDeleteEvent={isGuestMode ? handleGuestDeleteEvent : deleteEvent}
+            onDeleteEvent={handleDeleteTrigger}
           />
         </div>
 
-        <QuickActions 
+        <QuickActions
           onAddEvent={() => {
             setAiInitialData(undefined);
             setIsAddEventOpen(true);
-          }} 
+          }}
           onVoiceClick={() => setIsVoiceInputOpen(true)}
           onImageClick={() => setIsImageUploadOpen(true)}
           onTextClick={() => setIsTextInputOpen(true)}
         />
 
-        <AddEventDialog 
-          open={isAddEventOpen} 
+        <AddEventDialog
+          open={isAddEventOpen}
           onOpenChange={setIsAddEventOpen}
           onSubmit={isGuestMode ? handleGuestAddEvent : addEvent}
           selectedDate={date}
@@ -217,6 +270,12 @@ const Index = () => {
           open={isImageUploadOpen}
           onOpenChange={setIsImageUploadOpen}
           onParsed={handleAIParsed}
+        />
+
+        <DeleteRecurringDialog 
+          eventToDelete={eventToDelete}
+          onOpenChange={(open) => !open && setEventToDelete(null)}
+          onDeleteOption={handleRecurringDeleteOption}
         />
       </div>
     </div>
