@@ -1,7 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import Groq from "npm:groq-sdk"
 
-// Declare Deno global to fix TypeScript errors in standard IDE setups
 declare const Deno: {
   env: {
     get(name: string): string | undefined;
@@ -28,7 +27,6 @@ serve(async (req) => {
     let textToParse = "";
     let todayStr = "";
 
-    // Check if the request contains audio (FormData) or raw text (JSON)
     const contentType = req.headers.get("content-type") || "";
     if (contentType.includes("multipart/form-data")) {
       const formData = await req.formData();
@@ -52,11 +50,12 @@ serve(async (req) => {
 
     const systemPrompt = `
 You are an expert scheduling assistant. Your ONLY job is to extract event details and output an EXACT, valid JSON object.
-Context Information: Today's local date is ${todayStr}. Use this to exactly calculate actual dates for relative words like "today", "tomorrow", "Friday", "next week", etc.
+Context Information: Today's local date is ${todayStr}. Use this to exactly calculate actual dates for relative words like "today", "tomorrow", "Friday", "half a month", "a month before", etc.
 
 Use EXACTLY these keys and formats:
+- "thought_process": (string) Briefly explain your logic for calculating the final date and time based on the user's constraints. E.g. "The user said 1 month before April 28th, so the target date is March 28th."
 - "title": (string) A short, clean event title.
-- "date": (string) MUST be EXACTLY "YYYY-MM-DD". Calculate the date precisely. If totally unknown, return null.
+- "date": (string) MUST be EXACTLY "YYYY-MM-DD". Calculate the exact date algebraically based on your thought process. If totally unknown, return null.
 - "time": (string) MUST be EXACTLY "HH:MM" (24-hour time). E.g., "14:30" (2:30 PM), "09:00" (9 AM). If totally unknown, return null.
 - "description": (string) Clean summary. Remove any junk OCR characters, menus, random symbols. Return "" if none.
 - "category": (string) Best match: "work", "personal", "family", "health", "social", or "".
