@@ -1,44 +1,46 @@
 import { Button } from "@/components/ui/button";
 import { Plus, Mic, Image, MessageSquare } from "lucide-react";
-import { toast } from "sonner";
 
 interface QuickActionsProps {
   onAddEvent: () => void;
+  onVoiceClick: () => void;
+  onImageClick: () => void;
+  onTextClick: () => void;
 }
 
-const QuickActions = ({ onAddEvent }: QuickActionsProps) => {
+const QuickActions = ({ onAddEvent, onVoiceClick, onImageClick, onTextClick }: QuickActionsProps) => {
   return (
     <div className="fixed bottom-8 right-8 flex flex-col gap-4">
       <Button
         variant="outline"
         size="icon"
-        className="rounded-full"
-        onClick={() => toast.info("Voice input will be available soon!")}
+        className="rounded-full shadow-md"
+        onClick={onVoiceClick}
       >
-        <Mic className="h-6 w-6" />
+        <Mic className="h-6 w-6 text-primary" />
       </Button>
       <Button
         variant="outline"
         size="icon"
-        className="rounded-full"
-        onClick={() => toast.info("Image upload will be available soon!")}
+        className="rounded-full shadow-md"
+        onClick={onImageClick}
       >
-        <Image className="h-6 w-6" />
+        <Image className="h-6 w-6 text-primary" />
       </Button>
       <Button
         variant="outline"
         size="icon"
-        className="rounded-full"
-        onClick={() => toast.info("Text input will be available soon!")}
+        className="rounded-full shadow-md"
+        onClick={onTextClick}
       >
-        <MessageSquare className="h-6 w-6" />
+        <MessageSquare className="h-6 w-6 text-primary" />
       </Button>
       <Button
         size="icon"
-        className="rounded-full bg-primary hover:bg-primary/90"
+        className="rounded-full bg-primary hover:bg-primary/90 shadow-lg ml-auto w-14 h-14"
         onClick={onAddEvent}
       >
-        <Plus className="h-6 w-6" />
+        <Plus className="h-8 w-8" />
       </Button>
     </div>
   );

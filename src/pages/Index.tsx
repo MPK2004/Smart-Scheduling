@@ -5,7 +5,11 @@ import EditEventDialog from "@/components/EditEventDialog";
 import EventCalendar from "@/components/EventCalendar";
 import EventPanel from "@/components/EventPanel";
 import QuickActions from "@/components/QuickActions";
+import TextInputDialog from "@/components/TextInputDialog";
+import VoiceInputDialog from "@/components/VoiceInputDialog";
+import ImageUploadDialog from "@/components/ImageUploadDialog";
 import { Event } from "@/types/event";
+import { ParsedEvent } from "@/lib/ai";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { useEventManager } from "@/components/EventManager";
@@ -17,6 +21,10 @@ const Index = () => {
   const [date, setDate] = useState<Date | undefined>(new Date());
   const [isAddEventOpen, setIsAddEventOpen] = useState(false);
   const [isEditEventOpen, setIsEditEventOpen] = useState(false);
+  const [isTextInputOpen, setIsTextInputOpen] = useState(false);
+  const [isVoiceInputOpen, setIsVoiceInputOpen] = useState(false);
+  const [isImageUploadOpen, setIsImageUploadOpen] = useState(false);
+  const [aiInitialData, setAiInitialData] = useState<Partial<Event> | undefined>(undefined);
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
@@ -58,6 +66,30 @@ const Index = () => {
   const handleGuestDeleteEvent = (eventId: string) => {
     setGuestEvents((prev) => prev.filter((event) => event.id !== eventId));
     toast.success("Event deleted (guest mode)");
+  };
+
+  const handleAIParsed = (parsed: ParsedEvent) => {
+    if (parsed.date && parsed.time) {
+      // Fully parsed
+      const eventToSave = {
+        title: parsed.title,
+        date: parsed.date,
+        time: parsed.time,
+        description: parsed.description,
+        category: parsed.category,
+        recurrence: parsed.recurrence,
+      };
+      if (isGuestMode) {
+        handleGuestAddEvent(eventToSave);
+      } else {
+        addEvent(eventToSave);
+      }
+    } else {
+      // Partial parse, open manual dialog
+      setAiInitialData(parsed as Partial<Event>);
+      setIsAddEventOpen(true);
+      toast.info("Almost there! Please review and fill missing details.");
+    }
   };
 
   const getEventsForDate = useCallback((date: Date | undefined) => {
@@ -142,13 +174,22 @@ const Index = () => {
           />
         </div>
 
-        <QuickActions onAddEvent={() => setIsAddEventOpen(true)} />
+        <QuickActions 
+          onAddEvent={() => {
+            setAiInitialData(undefined);
+            setIsAddEventOpen(true);
+          }} 
+          onVoiceClick={() => setIsVoiceInputOpen(true)}
+          onImageClick={() => setIsImageUploadOpen(true)}
+          onTextClick={() => setIsTextInputOpen(true)}
+        />
 
         <AddEventDialog 
           open={isAddEventOpen} 
           onOpenChange={setIsAddEventOpen}
           onSubmit={isGuestMode ? handleGuestAddEvent : addEvent}
           selectedDate={date}
+          initialData={aiInitialData}
         />
 
         <EditEventDialog
@@ -156,6 +197,24 @@ const Index = () => {
           onOpenChange={setIsEditEventOpen}
           onSubmit={isGuestMode ? handleGuestUpdateEvent : updateEvent}
           event={selectedEvent}
+        />
+
+        <TextInputDialog
+          open={isTextInputOpen}
+          onOpenChange={setIsTextInputOpen}
+          onParsed={handleAIParsed}
+        />
+
+        <VoiceInputDialog
+          open={isVoiceInputOpen}
+          onOpenChange={setIsVoiceInputOpen}
+          onParsed={handleAIParsed}
+        />
+
+        <ImageUploadDialog
+          open={isImageUploadOpen}
+          onOpenChange={setIsImageUploadOpen}
+          onParsed={handleAIParsed}
         />
       </div>
     </div>
