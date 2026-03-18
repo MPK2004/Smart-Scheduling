@@ -139,7 +139,7 @@ const Index = () => {
   const selectedDateEvents = getEventsForDate(date);
 
   return (
-    <div className="min-h-screen bg-background p-4 md:p-8">
+    <div className="min-h-screen bg-background p-4 pb-48 md:p-8 md:pb-8">
       <div className="max-w-7xl mx-auto">
         <div className="flex justify-between items-center mb-8">
           <h1 className="text-4xl font-bold">Smart Schedule</h1>
