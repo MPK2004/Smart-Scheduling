@@ -13,6 +13,7 @@ interface AddEventDialogProps {
   onOpenChange: (open: boolean) => void;
   onSubmit: (event: Omit<Event, "id">) => void;
   selectedDate: Date | undefined;
+  initialData?: Partial<Event>;
 }
 
 const CATEGORIES = [
@@ -23,7 +24,7 @@ const CATEGORIES = [
   { value: "social", label: "Social" },
 ];
 
-const AddEventDialog = ({ open, onOpenChange, onSubmit, selectedDate }: AddEventDialogProps) => {
+const AddEventDialog = ({ open, onOpenChange, onSubmit, selectedDate, initialData }: AddEventDialogProps) => {
   const [title, setTitle] = useState("");
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
@@ -32,16 +33,27 @@ const AddEventDialog = ({ open, onOpenChange, onSubmit, selectedDate }: AddEvent
   const [recurrence, setRecurrence] = useState("none");
 
   useEffect(() => {
-    if (selectedDate) {
-      const localDate = new Date(
-        selectedDate.getFullYear(),
-        selectedDate.getMonth(),
-        selectedDate.getDate()
-      );
-      const formattedDate = localDate.toLocaleDateString('en-CA');
-      setDate(formattedDate);
+    if (open) {
+      setTitle(initialData?.title || "");
+      setTime(initialData?.time || "");
+      setDescription(initialData?.description || "");
+      setCategory(initialData?.category || "");
+      setRecurrence(initialData?.recurrence || "none");
+      
+      if (initialData?.date) {
+        setDate(initialData.date);
+      } else if (selectedDate) {
+        const localDate = new Date(
+          selectedDate.getFullYear(),
+          selectedDate.getMonth(),
+          selectedDate.getDate()
+        );
+        setDate(localDate.toLocaleDateString('en-CA'));
+      } else {
+        setDate("");
+      }
     }
-  }, [selectedDate]);
+  }, [open, initialData, selectedDate]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
