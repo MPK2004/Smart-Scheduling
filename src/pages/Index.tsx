@@ -69,26 +69,28 @@ const Index = () => {
   };
 
   const handleAIParsed = (parsed: ParsedEvent) => {
-    if (parsed.date && parsed.time) {
-      // Fully parsed
-      const eventToSave = {
-        title: parsed.title,
-        date: parsed.date,
-        time: parsed.time,
-        description: parsed.description,
-        category: parsed.category,
-        recurrence: parsed.recurrence,
-      };
-      if (isGuestMode) {
-        handleGuestAddEvent(eventToSave);
-      } else {
-        addEvent(eventToSave);
-      }
+    const today = new Date();
+    const defaultDate = today.toLocaleDateString('en-CA');
+    
+    const eventToSave = {
+      title: parsed.title,
+      date: parsed.date || defaultDate,
+      time: parsed.time || "09:00", // Default to 9 AM if time is missing
+      description: parsed.description,
+      category: parsed.category,
+      recurrence: parsed.recurrence,
+    };
+
+    if (isGuestMode) {
+      handleGuestAddEvent(eventToSave);
     } else {
-      // Partial parse, open manual dialog
-      setAiInitialData(parsed as Partial<Event>);
-      setIsAddEventOpen(true);
-      toast.info("Almost there! Please review and fill missing details.");
+      addEvent(eventToSave);
+    }
+
+    if (!parsed.date || !parsed.time) {
+      toast.info("Assumed defaults: " + eventToSave.date + " " + eventToSave.time);
+    } else {
+      toast.success("AI Found: " + eventToSave.date + " at " + eventToSave.time);
     }
   };
 
