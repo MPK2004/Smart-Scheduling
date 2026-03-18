@@ -104,9 +104,10 @@ const ImageUploadDialog = ({ open, onOpenChange, onParsed }: ImageUploadDialogPr
                  <img src={preview} alt="Upload preview" className="w-full object-contain" />
                  {isParsing && (
                    <div className="absolute inset-0 bg-background/60 backdrop-blur-sm flex items-center justify-center">
-                      <div className="flex flex-col items-center text-primary gap-2">
+                      <div className="flex flex-col items-center text-primary gap-2 text-center p-4">
                          <Loader2 className="h-10 w-10 animate-spin" />
-                         <span className="font-medium">Analyzing Image...</span>
+                         <span className="font-medium">Extracting Text & Analyzing...</span>
+                         <span className="text-xs text-muted-foreground mt-1">(This may take a moment the first time it runs)</span>
                       </div>
                    </div>
                  )}
