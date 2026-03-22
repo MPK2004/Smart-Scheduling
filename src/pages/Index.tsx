@@ -9,6 +9,7 @@ import TextInputDialog from "@/components/TextInputDialog";
 import VoiceInputDialog from "@/components/VoiceInputDialog";
 import ImageUploadDialog from "@/components/ImageUploadDialog";
 import DeleteRecurringDialog from "@/components/DeleteRecurringDialog";
+import TelegramLinkingDialog from "@/components/TelegramLinkingDialog";
 import { Event } from "@/types/event";
 import { ParsedEvent } from "@/lib/ai";
 import { isEventOnDate } from "@/lib/dateUtils";
@@ -26,6 +27,7 @@ const Index = () => {
   const [isTextInputOpen, setIsTextInputOpen] = useState(false);
   const [isVoiceInputOpen, setIsVoiceInputOpen] = useState(false);
   const [isImageUploadOpen, setIsImageUploadOpen] = useState(false);
+  const [isTelegramLinkingOpen, setIsTelegramLinkingOpen] = useState(false);
   const [aiInitialData, setAiInitialData] = useState<Partial<Event> | undefined>(undefined);
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
   const [eventToDelete, setEventToDelete] = useState<{ event: Event; targetDateStr: string } | null>(null);
@@ -237,6 +239,12 @@ const Index = () => {
           onVoiceClick={() => setIsVoiceInputOpen(true)}
           onImageClick={() => setIsImageUploadOpen(true)}
           onTextClick={() => setIsTextInputOpen(true)}
+          onTelegramClick={() => setIsTelegramLinkingOpen(true)}
+        />
+
+        <TelegramLinkingDialog
+          isOpen={isTelegramLinkingOpen}
+          onClose={() => setIsTelegramLinkingOpen(false)}
         />
 
         <AddEventDialog

@@ -49,27 +49,41 @@ serve(async (req) => {
       throw new Error("No text provided or extracted");
     }
 
-    // Help the LLM calculate Days by actively identifying the current weekday
     const todayDateObj = new Date(todayStr + "T12:00:00Z");
     const todayDayOfWeek = todayDateObj.toLocaleDateString('en-US', { weekday: 'long' });
     const fullTodayContext = `${todayStr} (${todayDayOfWeek})`;
 
     const systemPrompt = `
-You are an expert scheduling assistant. Your ONLY job is to extract event details and output an EXACT, valid JSON object.
-Context Information: Today's local date is ${fullTodayContext}. 
+You are an expert scheduling assistant. Today is ${fullTodayContext}.
 
-Use EXACTLY these keys and formats:
-- "thought_process": (string) Step 1: Identify the base reference date. Step 2: Apply any math for relative words (e.g., "previous day", "2 months prior"). Step 3: State the exact resulting calendar day (e.g. "13th May", "March 24th").
-- "title": (string) A short, clean event title.
-- "date_reference": (string) The final absolute calendar date resolved from your thought process. Drop all relational words. (e.g., replace "previous day of 14th May" with strictly "13th May". Replace "next 4 thursdays" with strictly "next thursday"). If no date, return null.
-- "description": (string) Clean summary. Remove any junk OCR characters, menus, random symbols. Return "" if none.
-- "category": (string) Best match: "work", "personal", "family", "health", "social", or "".
-- "recurrence": (string) Base options: "none", "daily", "weekly", "monthly", "yearly". If the user explicitly gives an ending date/duration (like "for 2 months"), try to calculate the end date and append it using ";until=YYYY-MM-DD". Example: "weekly;until=2026-05-18". Default to "none".
+CRITICAL: Many users want REMINDERS BEFORE an event or deadline. You MUST separate the anchor date from any offset.
 
-Return ONLY JSON. Do not add any text before or after the JSON.
+Examples:
+- "appointment on 21st, remind 3 days before" → event_date_reference: "21st", offset_days: -3
+- "project due May 15, remind a week early" → event_date_reference: "May 15", offset_days: -7 
+- "birthday on April 29, arrange money a month before" → event_date_reference: "April 29", offset_days: -30
+- "meeting next Friday" → event_date_reference: "next Friday", offset_days: 0
+- "gym tomorrow at 6pm" → event_date_reference: "tomorrow", offset_days: 0
+
+Return ONLY this JSON:
+{
+  "thought_process": "Step-by-step reasoning about the anchor date and any offset",
+  "title": "Short clean event title",
+  "event_date_reference": "The anchor/base date as text (e.g., '21st', 'next Friday', 'May 15')",
+  "offset_days": 0,
+  "time": "HH:MM or null",
+  "description": "Clean description or empty string",
+  "category": "work|personal|family|health|social or empty",
+  "recurrence": "none|daily|weekly|monthly|yearly or with until like weekly;until=YYYY-MM-DD"
+}
+
+Rules:
+- offset_days is NEGATIVE for "before/prior/early/earlier" and POSITIVE for "after/later". Default 0.
+- event_date_reference is the ANCHOR date — the event/deadline/birthday itself.
+- The title should describe the REMINDER/ACTION, not just the anchor (e.g., "Arrange money for birthday" not "Birthday").
 `;
 
-    const userPrompt = "Extract event details from this text:\\n" + textToParse;
+    const userPrompt = "Extract event details from this text:\n" + textToParse;
 
     const completion = await groq.chat.completions.create({
       messages: [
@@ -84,8 +98,18 @@ Return ONLY JSON. Do not add any text before or after the JSON.
     const jsonString = completion.choices[0]?.message?.content || "{}";
     const parsed = JSON.parse(jsonString);
 
-    // Deep deterministic NLP Date extraction based on the LLM's mathematically translated phrase
-    if (parsed.date_reference) {
+    // Deterministic date arithmetic
+    if (parsed.event_date_reference) {
+      const anchorDate = chrono.parseDate(parsed.event_date_reference, todayDateObj, { forwardDate: true });
+      if (anchorDate) {
+        const offset = parseInt(parsed.offset_days) || 0;
+        const finalDate = new Date(anchorDate);
+        finalDate.setDate(finalDate.getDate() + offset);
+        parsed.date = finalDate.toISOString().split('T')[0];
+      }
+    }
+    // Fallback: legacy date_reference field
+    if (!parsed.date && parsed.date_reference) {
       const resultDate = chrono.parseDate(parsed.date_reference, todayDateObj, { forwardDate: true });
       if (resultDate) {
         parsed.date = resultDate.toISOString().split('T')[0];
