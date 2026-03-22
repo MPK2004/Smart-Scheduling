@@ -247,7 +247,7 @@ Return JSON:
       if (parsed.title && parsed.title.toLowerCase() !== term.toLowerCase()) updateData.title = parsed.title;
       const resDate = parsed.date || target.start_date.split('T')[0];
       const resTime = parsed.time || target.start_date.split('T')[1].substring(0, 5);
-      updateData.start_date = new Date(`${resDate}T${resTime}:00Z`).toISOString();
+      updateData.start_date = new Date(`${resDate}T${resTime}:00+05:30`).toISOString();
       await supabase.from('events').update(updateData).eq('id', target.id);
       await supabase.from('profiles').update({ last_event_id: target.id }).eq('id', profile.id);
       return await sendTelegramMessage(chatId, `✅ *Rescheduled:* ${target.title}\n📅 ${resDate} @ ${resTime}`);
@@ -259,7 +259,7 @@ Return JSON:
       if (parsed.title) updateData.title = parsed.title;
       const resDate = parsed.date || contextEvent.start_date.split('T')[0];
       const resTime = parsed.time || contextEvent.start_date.split('T')[1].substring(0, 5);
-      updateData.start_date = new Date(`${resDate}T${resTime}:00Z`).toISOString();
+      updateData.start_date = new Date(`${resDate}T${resTime}:00+05:30`).toISOString();
       await supabase.from('events').update(updateData).eq('id', contextEventId);
       return await sendTelegramMessage(chatId, `✅ *Updated:* ${updateData.title || contextEvent.title}\n📅 ${resDate} @ ${resTime}`);
     }
@@ -270,7 +270,7 @@ Return JSON:
       user_id: profile.id,
       title: parsed.title,
       description: parsed.description || "",
-      start_date: new Date(`${parsed.date}T${parsed.time || '09:00'}:00Z`).toISOString(),
+      start_date: new Date(`${parsed.date}T${parsed.time || '09:00'}:00+05:30`).toISOString(),
       category: parsed.category || "",
       recurrence: parsed.recurrence || "none"
     }]).select().single();
@@ -362,7 +362,7 @@ async function handleCallbackQuery(callbackQuery: any) {
       if (target) {
         const resDate = newDate || target.start_date.split('T')[0];
         const resTime = newTime || target.start_date.split('T')[1].substring(0, 5);
-        await supabase.from('events').update({ start_date: new Date(`${resDate}T${resTime}:00Z`).toISOString() }).eq('id', eventId);
+        await supabase.from('events').update({ start_date: new Date(`${resDate}T${resTime}:00+05:30`).toISOString() }).eq('id', eventId);
         await editTelegramMessage(chatId, callbackQuery.message.message_id, `✅ Rescheduled: *${target.title}* → ${resDate} @ ${resTime}`);
       }
     }
