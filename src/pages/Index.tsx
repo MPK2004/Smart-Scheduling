@@ -5,13 +5,10 @@ import EditEventDialog from "@/components/EditEventDialog";
 import EventCalendar from "@/components/EventCalendar";
 import EventPanel from "@/components/EventPanel";
 import QuickActions from "@/components/QuickActions";
-import TextInputDialog from "@/components/TextInputDialog";
-import VoiceInputDialog from "@/components/VoiceInputDialog";
-import ImageUploadDialog from "@/components/ImageUploadDialog";
+import ChatPanel from "@/components/ChatPanel";
 import DeleteRecurringDialog from "@/components/DeleteRecurringDialog";
 import TelegramLinkingDialog from "@/components/TelegramLinkingDialog";
 import { Event } from "@/types/event";
-import { ParsedEvent } from "@/lib/ai";
 import { isEventOnDate } from "@/lib/dateUtils";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -24,9 +21,7 @@ const Index = () => {
   const [date, setDate] = useState<Date | undefined>(new Date());
   const [isAddEventOpen, setIsAddEventOpen] = useState(false);
   const [isEditEventOpen, setIsEditEventOpen] = useState(false);
-  const [isTextInputOpen, setIsTextInputOpen] = useState(false);
-  const [isVoiceInputOpen, setIsVoiceInputOpen] = useState(false);
-  const [isImageUploadOpen, setIsImageUploadOpen] = useState(false);
+  const [isChatOpen, setIsChatOpen] = useState(false);
   const [isTelegramLinkingOpen, setIsTelegramLinkingOpen] = useState(false);
   const [aiInitialData, setAiInitialData] = useState<Partial<Event> | undefined>(undefined);
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
@@ -36,7 +31,7 @@ const Index = () => {
   const [guestEvents, setGuestEvents] = useState<Event[]>([]);
   const [isGuestMode, setIsGuestMode] = useState(false);
 
-  const { events, addEvent, updateEvent, deleteEvent } = useEventManager();
+  const { events, addEvent, updateEvent, deleteEvent, fetchEvents } = useEventManager();
 
   const handleDateSelect = (selectedDate: Date | undefined) => {
     setDate(selectedDate);
@@ -121,32 +116,6 @@ const Index = () => {
       isGuestMode ? handleGuestUpdateEvent({ ...event, recurrence: newRecur }) : updateEvent({ ...event, recurrence: newRecur });
     }
     setEventToDelete(null);
-  };
-
-  const handleAIParsed = (parsed: ParsedEvent) => {
-    const today = new Date();
-    const defaultDate = today.toLocaleDateString('en-CA');
-
-    const eventToSave = {
-      title: parsed.title,
-      date: parsed.date || defaultDate,
-      time: parsed.time || "09:00", // Default to 9 AM if time is missing
-      description: parsed.description,
-      category: parsed.category,
-      recurrence: parsed.recurrence,
-    };
-
-    if (isGuestMode) {
-      handleGuestAddEvent(eventToSave);
-    } else {
-      addEvent(eventToSave);
-    }
-
-    if (!parsed.date || !parsed.time) {
-      toast.info("Assumed defaults: " + eventToSave.date + " " + eventToSave.time);
-    } else {
-      toast.success("AI Found: " + eventToSave.date + " at " + eventToSave.time);
-    }
   };
 
   const getEventsForDate = useCallback((date: Date | undefined) => {
@@ -236,10 +205,14 @@ const Index = () => {
             setAiInitialData(undefined);
             setIsAddEventOpen(true);
           }}
-          onVoiceClick={() => setIsVoiceInputOpen(true)}
-          onImageClick={() => setIsImageUploadOpen(true)}
-          onTextClick={() => setIsTextInputOpen(true)}
+          onChatClick={() => setIsChatOpen(true)}
           onTelegramClick={() => setIsTelegramLinkingOpen(true)}
+        />
+
+        <ChatPanel
+          open={isChatOpen}
+          onOpenChange={setIsChatOpen}
+          onEventChanged={fetchEvents}
         />
 
         <TelegramLinkingDialog
@@ -260,24 +233,6 @@ const Index = () => {
           onOpenChange={setIsEditEventOpen}
           onSubmit={isGuestMode ? handleGuestUpdateEvent : updateEvent}
           event={selectedEvent}
-        />
-
-        <TextInputDialog
-          open={isTextInputOpen}
-          onOpenChange={setIsTextInputOpen}
-          onParsed={handleAIParsed}
-        />
-
-        <VoiceInputDialog
-          open={isVoiceInputOpen}
-          onOpenChange={setIsVoiceInputOpen}
-          onParsed={handleAIParsed}
-        />
-
-        <ImageUploadDialog
-          open={isImageUploadOpen}
-          onOpenChange={setIsImageUploadOpen}
-          onParsed={handleAIParsed}
         />
 
         <DeleteRecurringDialog 

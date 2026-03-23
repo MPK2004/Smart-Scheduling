@@ -21,7 +21,7 @@ interface ChatPanelProps {
 
 const ChatPanel = ({ open, onOpenChange, onEventChanged }: ChatPanelProps) => {
   const [messages, setMessages] = useState<Message[]>([
-    { role: "assistant", content: "👋 Hey! I'm Maantis, your AI scheduling assistant. I can create events, check your schedule, resolve conflicts, and more. What can I help with?" }
+    { role: "assistant", content: "Hey! I'm Maantis, your AI scheduling assistant. I can create events, check your schedule, resolve conflicts, and more. What can I help with?" }
   ]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -40,7 +40,7 @@ const ChatPanel = ({ open, onOpenChange, onEventChanged }: ChatPanelProps) => {
 
   const sendToAgent = async (userMessage: string, inputType: string = "text", fileData?: string) => {
     setIsLoading(true);
-    setMessages(prev => [...prev, { role: "status", content: "🧠 Thinking..." }]);
+    setMessages(prev => [...prev, { role: "status", content: "Thinking..." }]);
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -56,21 +56,18 @@ const ChatPanel = ({ open, onOpenChange, onEventChanged }: ChatPanelProps) => {
           message: userMessage,
           input_type: inputType,
           file_data: fileData,
-          conversation_history: conversationHistory.current.slice(-10), // Last 10 messages for context
+          conversation_history: conversationHistory.current.slice(-10),
         },
       });
 
       if (error) throw new Error(error.message);
 
-      // Remove the "thinking" status
       setMessages(prev => prev.filter(m => m.role !== "status"));
 
-      // Add transcription note if voice
       if (data.transcription && inputType === "voice") {
-        setMessages(prev => [...prev, { role: "status", content: `🎤 Heard: "${data.transcription}"` }]);
+        setMessages(prev => [...prev, { role: "status", content: `Heard: "${data.transcription}"` }]);
       }
 
-      // Add the response
       const assistantMsg: Message = {
         role: "assistant",
         content: data.response || "I processed your request.",
@@ -78,18 +75,16 @@ const ChatPanel = ({ open, onOpenChange, onEventChanged }: ChatPanelProps) => {
       };
       setMessages(prev => [...prev, assistantMsg]);
 
-      // Update conversation history for context
       conversationHistory.current.push({ role: "user", content: userMessage });
       conversationHistory.current.push({ role: "assistant", content: data.response });
 
-      // Refresh events in the calendar if tools modified data
       if (data.tool_calls_made?.some((t: any) => ["create_event", "update_event", "delete_event"].includes(t.tool))) {
         onEventChanged?.();
       }
 
     } catch (err: any) {
       setMessages(prev => prev.filter(m => m.role !== "status"));
-      setMessages(prev => [...prev, { role: "assistant", content: `⚠️ Error: ${err.message}` }]);
+      setMessages(prev => [...prev, { role: "assistant", content: `Error: ${err.message}` }]);
     } finally {
       setIsLoading(false);
     }
@@ -118,11 +113,10 @@ const ChatPanel = ({ open, onOpenChange, onEventChanged }: ChatPanelProps) => {
         const audioBlob = new Blob(audioChunks.current, { type: 'audio/webm' });
         stream.getTracks().forEach(track => track.stop());
 
-        // Convert to base64
         const reader = new FileReader();
         reader.onloadend = async () => {
           const base64 = (reader.result as string).split(',')[1];
-          setMessages(prev => [...prev, { role: "user", content: "🎤 Voice message" }]);
+          setMessages(prev => [...prev, { role: "user", content: "Voice message" }]);
           await sendToAgent("", "voice", base64);
         };
         reader.readAsDataURL(audioBlob);
@@ -149,7 +143,7 @@ const ChatPanel = ({ open, onOpenChange, onEventChanged }: ChatPanelProps) => {
     const reader = new FileReader();
     reader.onloadend = async () => {
       const base64 = (reader.result as string).split(',')[1];
-      setMessages(prev => [...prev, { role: "user", content: `📷 Image: ${file.name}` }]);
+      setMessages(prev => [...prev, { role: "user", content: `Image: ${file.name}` }]);
       await sendToAgent(input || "", "image", base64);
       setInput("");
     };
@@ -160,7 +154,6 @@ const ChatPanel = ({ open, onOpenChange, onEventChanged }: ChatPanelProps) => {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[500px] h-[600px] flex flex-col p-0 gap-0">
-        {/* Header */}
         <div className="flex items-center gap-3 p-4 border-b bg-primary/5">
           <div className="w-9 h-9 rounded-full bg-primary flex items-center justify-center">
             <Bot className="h-5 w-5 text-white" />
@@ -171,7 +164,6 @@ const ChatPanel = ({ open, onOpenChange, onEventChanged }: ChatPanelProps) => {
           </div>
         </div>
 
-        {/* Messages */}
         <ScrollArea className="flex-1 p-4" ref={scrollRef}>
           <div className="space-y-4">
             {messages.map((msg, i) => (
@@ -222,7 +214,6 @@ const ChatPanel = ({ open, onOpenChange, onEventChanged }: ChatPanelProps) => {
           </div>
         </ScrollArea>
 
-        {/* Input Bar */}
         <div className="p-3 border-t bg-background">
           <form onSubmit={handleSubmit} className="flex items-center gap-2">
             <input
