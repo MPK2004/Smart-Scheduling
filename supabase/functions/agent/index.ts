@@ -154,53 +154,49 @@ async function toolCreateEvent(userId: string, args: any) {
 }
 
 async function toolGetEvents(userId: string, args: any) {
-  const buildQuery = (searchTerm?: string) => {
-    let q = supabase.from('events').select('*').eq('user_id', userId)
-      .order('start_date', { ascending: true });
+  let query = supabase.from('events').select('*').eq('user_id', userId)
+    .order('start_date', { ascending: true });
 
-    if (args.start_date && args.end_date) {
-      const start = new Date(`${args.start_date}T00:00:00+05:30`).toISOString();
-      const end = new Date(`${args.end_date}T23:59:59+05:30`).toISOString();
-      q = q.gte('start_date', start).lte('start_date', end);
-    }
+  if (args.start_date && args.end_date) {
+    const start = new Date(`${args.start_date}T00:00:00+05:30`).toISOString();
+    const end = new Date(`${args.end_date}T23:59:59+05:30`).toISOString();
+    query = query.gte('start_date', start).lte('start_date', end);
+  }
 
-    if (searchTerm) {
-      q = q.or(`title.ilike.%${searchTerm}%,category.ilike.%${searchTerm}%,description.ilike.%${searchTerm}%`);
-    }
-    return q;
-  };
+  const { data, error } = await query.limit(100);
+  if (error) return { error: error.message };
+  if (!data || data.length === 0) return { count: 0, events: [], message: "No matching events found." };
 
-  const formatEvents = (data: any[]) => ({
-    count: data.length,
-    events: data.map((e: any) => ({
+  const formatEvents = (events: any[]) => ({
+    count: events.length,
+    events: events.map((e: any) => ({
       id: e.id, title: e.title,
       date: e.start_date.split('T')[0],
       time: e.start_date.split('T')[1].substring(0, 5),
     })),
   });
 
-  // Primary search
-  const { data, error } = await buildQuery(args.query).limit(20);
-  if (error) return { error: error.message };
-  if (data && data.length > 0) return formatEvents(data);
+  // If no keyword query, return all fetched events
+  if (!args.query) return formatEvents(data);
 
-  // Fuzzy fallback: if query has multiple words, search each word individually
-  if (args.query) {
-    const words = args.query.trim().split(/\s+/).filter((w: string) => w.length >= 2);
-    if (words.length > 1) {
-      const seen = new Set<string>();
-      const allMatches: any[] = [];
-      for (const word of words) {
-        const { data: wordData } = await buildQuery(word).limit(20);
-        if (wordData) {
-          for (const ev of wordData) {
-            if (!seen.has(ev.id)) { seen.add(ev.id); allMatches.push(ev); }
-          }
-        }
-      }
-      if (allMatches.length > 0) {
-        return { ...formatEvents(allMatches), note: "Fuzzy match — exact query had no results, matched on individual words." };
-      }
+  const q = args.query.toLowerCase();
+  const matchesText = (event: any, term: string) => {
+    const t = term.toLowerCase();
+    return (event.title || '').toLowerCase().includes(t) ||
+           (event.category || '').toLowerCase().includes(t) ||
+           (event.description || '').toLowerCase().includes(t);
+  };
+
+  // Primary: exact phrase match
+  const exactMatches = data.filter((e: any) => matchesText(e, q));
+  if (exactMatches.length > 0) return formatEvents(exactMatches);
+
+  // Fallback: match any individual word (handles typos like "Minvith Das" → "Das" still matches)
+  const words = args.query.trim().split(/\s+/).filter((w: string) => w.length >= 2);
+  if (words.length > 1) {
+    const wordMatches = data.filter((e: any) => words.some((w: string) => matchesText(e, w)));
+    if (wordMatches.length > 0) {
+      return { ...formatEvents(wordMatches), note: "Fuzzy match — matched on individual words." };
     }
   }
 
