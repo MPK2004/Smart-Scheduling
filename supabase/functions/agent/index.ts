@@ -154,31 +154,57 @@ async function toolCreateEvent(userId: string, args: any) {
 }
 
 async function toolGetEvents(userId: string, args: any) {
-  let query = supabase.from('events').select('*').eq('user_id', userId)
-    .order('start_date', { ascending: true });
+  const buildQuery = (searchTerm?: string) => {
+    let q = supabase.from('events').select('*').eq('user_id', userId)
+      .order('start_date', { ascending: true });
 
-  if (args.start_date && args.end_date) {
-    const start = new Date(`${args.start_date}T00:00:00+05:30`).toISOString();
-    const end = new Date(`${args.end_date}T23:59:59+05:30`).toISOString();
-    query = query.gte('start_date', start).lte('start_date', end);
-  }
+    if (args.start_date && args.end_date) {
+      const start = new Date(`${args.start_date}T00:00:00+05:30`).toISOString();
+      const end = new Date(`${args.end_date}T23:59:59+05:30`).toISOString();
+      q = q.gte('start_date', start).lte('start_date', end);
+    }
 
-  if (args.query) {
-    query = query.or(`title.ilike.%${args.query}%,category.ilike.%${args.query}%,description.ilike.%${args.query}%`);
-  }
+    if (searchTerm) {
+      q = q.or(`title.ilike.%${searchTerm}%,category.ilike.%${searchTerm}%,description.ilike.%${searchTerm}%`);
+    }
+    return q;
+  };
 
-  const { data, error } = await query.limit(20);
-  if (error) return { error: error.message };
-  if (!data || data.length === 0) return { count: 0, events: [], message: "No matching events found." };
-
-  return {
+  const formatEvents = (data: any[]) => ({
     count: data.length,
     events: data.map((e: any) => ({
       id: e.id, title: e.title,
       date: e.start_date.split('T')[0],
       time: e.start_date.split('T')[1].substring(0, 5),
     })),
-  };
+  });
+
+  // Primary search
+  const { data, error } = await buildQuery(args.query).limit(20);
+  if (error) return { error: error.message };
+  if (data && data.length > 0) return formatEvents(data);
+
+  // Fuzzy fallback: if query has multiple words, search each word individually
+  if (args.query) {
+    const words = args.query.trim().split(/\s+/).filter((w: string) => w.length >= 2);
+    if (words.length > 1) {
+      const seen = new Set<string>();
+      const allMatches: any[] = [];
+      for (const word of words) {
+        const { data: wordData } = await buildQuery(word).limit(20);
+        if (wordData) {
+          for (const ev of wordData) {
+            if (!seen.has(ev.id)) { seen.add(ev.id); allMatches.push(ev); }
+          }
+        }
+      }
+      if (allMatches.length > 0) {
+        return { ...formatEvents(allMatches), note: "Fuzzy match — exact query had no results, matched on individual words." };
+      }
+    }
+  }
+
+  return { count: 0, events: [], message: "No matching events found." };
 }
 
 async function toolUpdateEvent(userId: string, args: any) {
@@ -301,7 +327,8 @@ BEHAVIOR:
 - Check conflicts before creating events.
 
 TOOL USAGE:
-- get_events: pass query for keyword search (e.g. query:"birthday"), date range for time filtering, or both. Backend filters server-side.
+- get_events: pass query for keyword search (e.g. query:"birthday"), date range for time filtering, or both. Backend filters server-side and does fuzzy word-by-word fallback automatically.
+- If a name/keyword search returns 0 results, try alternate spellings or just the last name or a broader term. For example, if "Minvith Das" returns nothing, try "Das" or "birthday".
 - When user mentions multiple topics (e.g. "hiring challenges and meetups"), call get_events ONCE with a broad date range and no query, then filter the results yourself. Or call get_events multiple times with different queries.
 - All dates must use year ${todayStr.split('-')[0]}.
 
