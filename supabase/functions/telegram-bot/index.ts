@@ -1,14 +1,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
-import { encode } from "https://deno.land/std@0.168.0/encoding/base64.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7"
 import Groq from "npm:groq-sdk"
-import * as chrono from "npm:chrono-node"
 
-declare const Deno: {
-  env: {
-    get(name: string): string | undefined;
-  };
-};
+declare const Deno: { env: { get(name: string): string | undefined } };
 
 const TELEGRAM_BOT_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -21,352 +15,298 @@ const groq = new Groq({ apiKey: GROQ_API_KEY });
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+};
+
+const toolDefinitions = [
+  {
+    type: "function" as const,
+    function: {
+      name: "create_event",
+      description: "Create event. Auto-checks conflicts.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          date: { type: "string", description: "YYYY-MM-DD" },
+          time: { type: "string", description: "HH:MM 24h. Default 09:00" },
+          description: { type: "string" },
+          category: { type: "string", enum: ["work", "personal", "family", "health", "social", ""] },
+          recurrence: { type: "string", enum: ["none", "daily", "weekly", "monthly", "yearly"] },
+        },
+        required: ["title", "date"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "get_events",
+      description: "Fetch events. Supports date range, keyword search, or both. At least one of start_date or query is required.",
+      parameters: {
+        type: "object",
+        properties: {
+          start_date: { type: "string", description: "YYYY-MM-DD" },
+          end_date: { type: "string", description: "YYYY-MM-DD" },
+          query: { type: "string", description: "Keyword to search in title, category, description" },
+        },
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "update_event",
+      description: "Update event fields by event_id.",
+      parameters: {
+        type: "object",
+        properties: {
+          event_id: { type: "string" },
+          title: { type: "string" },
+          date: { type: "string", description: "YYYY-MM-DD" },
+          time: { type: "string", description: "HH:MM" },
+          description: { type: "string" },
+          category: { type: "string" },
+        },
+        required: ["event_id"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "delete_event",
+      description: "Delete event. Returns details first. Pass confirmed=true to confirm.",
+      parameters: {
+        type: "object",
+        properties: {
+          event_id: { type: "string" },
+          confirmed: { type: "boolean" },
+        },
+        required: ["event_id"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "analyze_schedule",
+      description: "Analyze schedule: busiest day, free slots, conflicts.",
+      parameters: {
+        type: "object",
+        properties: {
+          start_date: { type: "string", description: "YYYY-MM-DD" },
+          end_date: { type: "string", description: "YYYY-MM-DD" },
+        },
+        required: ["start_date", "end_date"],
+      },
+    },
+  },
+];
+
+async function toolCreateEvent(userId: string, args: any) {
+  const time = args.time || "09:00";
+  const startDate = new Date(`${args.date}T${time}:00+05:30`).toISOString();
+
+  const startCheck = new Date(`${args.date}T00:00:00+05:30`).toISOString();
+  const endCheck = new Date(`${args.date}T23:59:59+05:30`).toISOString();
+  const { data: existing } = await supabase
+    .from('events').select('*').eq('user_id', userId)
+    .gte('start_date', startCheck).lte('start_date', endCheck);
+
+  if (existing && existing.length > 0) {
+    const newHour = parseInt(time.split(':')[0]);
+    const conflicts = existing.filter(e => {
+      const eHour = new Date(e.start_date).getUTCHours();
+      return Math.abs(eHour - newHour) < 1;
+    });
+    if (conflicts.length > 0) {
+      return {
+        conflict: true,
+        message: `Time conflict detected on ${args.date}`,
+        conflicting_events: conflicts.map(e => ({
+          id: e.id, title: e.title,
+          date: e.start_date.split('T')[0],
+          time: e.start_date.split('T')[1].substring(0, 5),
+        })),
+        existing_events_that_day: existing.map(e => ({
+          id: e.id, title: e.title,
+          time: e.start_date.split('T')[1].substring(0, 5),
+        })),
+      };
+    }
+  }
+
+  const { data, error } = await supabase.from('events').insert([{
+    user_id: userId,
+    title: args.title,
+    description: args.description || "",
+    start_date: startDate,
+    category: args.category || "",
+    recurrence: args.recurrence || "none",
+  }]).select().single();
+
+  if (error) return { error: error.message };
+  return {
+    created: true,
+    event: { id: data.id, title: data.title, date: args.date, time, category: data.category },
+  };
 }
 
-serve(async (req: any) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
-  try {
-    const update = await req.json();
-    if (update.message) await handleMessage(update.message);
-    else if (update.callback_query) await handleCallbackQuery(update.callback_query);
-    return new Response(JSON.stringify({ ok: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 });
-  } catch (error: any) {
-    console.error("Update Error:", error);
-    return new Response(JSON.stringify({ error: error.message }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 });
-  }
-});
+async function toolGetEvents(userId: string, args: any) {
+  let query = supabase.from('events').select('*').eq('user_id', userId)
+    .order('start_date', { ascending: true });
 
-// ── Fix 4: Extract event ID from a replied-to bot message ──
-function extractEventIdFromReply(replyMessage: any): string | null {
-  if (!replyMessage) return null;
-  // Check callback_data in inline keyboards
-  if (replyMessage.reply_markup?.inline_keyboard) {
-    for (const row of replyMessage.reply_markup.inline_keyboard) {
-      for (const btn of row) {
-        if (btn.callback_data?.startsWith('del_')) {
-          return btn.callback_data.replace('del_', '');
+  if (args.start_date && args.end_date) {
+    const start = new Date(`${args.start_date}T00:00:00+05:30`).toISOString();
+    const end = new Date(`${args.end_date}T23:59:59+05:30`).toISOString();
+    query = query.gte('start_date', start).lte('start_date', end);
+  }
+
+  if (args.query) {
+    query = query.or(`title.ilike.%${args.query}%,category.ilike.%${args.query}%,description.ilike.%${args.query}%`);
+  }
+
+  const { data, error } = await query.limit(20);
+  if (error) return { error: error.message };
+  if (!data || data.length === 0) return { count: 0, events: [], message: "No matching events found." };
+
+  return {
+    count: data.length,
+    events: data.map((e: any) => ({
+      id: e.id, title: e.title,
+      date: e.start_date.split('T')[0],
+      time: e.start_date.split('T')[1].substring(0, 5),
+    })),
+  };
+}
+
+async function toolUpdateEvent(userId: string, args: any) {
+  const updateData: any = {};
+  if (args.title) updateData.title = args.title;
+  if (args.description) updateData.description = args.description;
+  if (args.category) updateData.category = args.category;
+  if (args.date || args.time) {
+    const { data: existing } = await supabase.from('events').select('start_date').eq('id', args.event_id).single();
+    if (!existing) return { error: "Event not found" };
+    const curDate = existing.start_date.split('T')[0];
+    const curTime = existing.start_date.split('T')[1].substring(0, 5);
+    const newDate = args.date || curDate;
+    const newTime = args.time || curTime;
+    updateData.start_date = new Date(`${newDate}T${newTime}:00+05:30`).toISOString();
+  }
+
+  const { data, error } = await supabase.from('events').update(updateData)
+    .eq('id', args.event_id).eq('user_id', userId).select().single();
+  if (error) return { error: error.message };
+  return {
+    updated: true,
+    event: { id: data.id, title: data.title, date: data.start_date.split('T')[0], time: data.start_date.split('T')[1].substring(0, 5) },
+  };
+}
+
+async function toolDeleteEvent(userId: string, args: any) {
+  const { data: event } = await supabase.from('events').select('*')
+    .eq('id', args.event_id).eq('user_id', userId).single();
+  if (!event) return { error: "Event not found" };
+
+  if (!args.confirmed) {
+    return {
+      requires_confirmation: true,
+      event: { id: event.id, title: event.title, date: event.start_date.split('T')[0], time: event.start_date.split('T')[1].substring(0, 5) },
+      message: `Are you sure you want to delete "${event.title}" on ${event.start_date.split('T')[0]}?`,
+    };
+  }
+
+  const { error } = await supabase.from('events').delete().eq('id', args.event_id).eq('user_id', userId);
+  if (error) return { error: error.message };
+  return { deleted: true, title: event.title };
+}
+
+async function toolAnalyzeSchedule(userId: string, args: any) {
+  const start = new Date(`${args.start_date}T00:00:00+05:30`).toISOString();
+  const end = new Date(`${args.end_date}T23:59:59+05:30`).toISOString();
+
+  const { data: events } = await supabase.from('events').select('*').eq('user_id', userId)
+    .gte('start_date', start).lte('start_date', end)
+    .order('start_date', { ascending: true });
+
+  if (!events || events.length === 0) {
+    return { total_events: 0, busiest_day: null, free_slots: [], conflicts: [], message: "No events in this period." };
+  }
+
+  const dayCounts: Record<string, number> = {};
+  const dayEvents: Record<string, any[]> = {};
+  for (const e of events) {
+    const day = e.start_date.split('T')[0];
+    dayCounts[day] = (dayCounts[day] || 0) + 1;
+    if (!dayEvents[day]) dayEvents[day] = [];
+    dayEvents[day].push({ title: e.title, time: e.start_date.split('T')[1].substring(0, 5) });
+  }
+
+  const busiestDay = Object.entries(dayCounts).sort((a, b) => b[1] - a[1])[0];
+
+  const conflicts: any[] = [];
+  for (const [day, evts] of Object.entries(dayEvents)) {
+    for (let i = 0; i < evts.length; i++) {
+      for (let j = i + 1; j < evts.length; j++) {
+        const h1 = parseInt(evts[i].time.split(':')[0]);
+        const h2 = parseInt(evts[j].time.split(':')[0]);
+        if (Math.abs(h1 - h2) < 1) {
+          conflicts.push({ day, event1: evts[i].title, event2: evts[j].title, overlap: evts[i].time });
         }
       }
     }
   }
-  return null;
+
+  const freeSlots: any[] = [];
+  for (const day of Object.keys(dayCounts)) {
+    const busyHours = new Set(dayEvents[day].map(e => parseInt(e.time.split(':')[0])));
+    const slots: string[] = [];
+    for (let h = 9; h < 18; h++) {
+      if (!busyHours.has(h)) slots.push(`${h}:00-${h + 1}:00`);
+    }
+    if (slots.length > 0) freeSlots.push({ day, slots });
+  }
+
+  return {
+    total_events: events.length,
+    busiest_day: busiestDay ? { date: busiestDay[0], count: busiestDay[1] } : null,
+    conflicts,
+    free_slots: freeSlots,
+  };
 }
 
-async function handleMessage(message: any) {
-  const chatId = message.chat.id;
-  const { data: profile } = await supabase.from('profiles').select('id, username, last_event_id').eq('telegram_chat_id', chatId).single();
-
-  if (!profile) {
-    const text = message.text;
-    if (text?.startsWith('/link') || text?.startsWith('/start')) {
-      const parts = text.split(' ');
-      const code = parts.length > 1 ? parts[1] : null;
-      if (code && !code.includes('@')) {
-        const { data: userData } = await supabase.from('profiles').update({ telegram_chat_id: chatId, link_code: null }).eq('link_code', code.trim().toUpperCase()).select('username').single();
-        if (userData) return await sendTelegramMessage(chatId, `🎉 *Linked!* Welcome @${userData.username}.`);
-      }
-      return await sendTelegramMessage(chatId, "👋 Welcome! Send `/link YOUR-CODE` from the web app.");
-    }
-    return await sendTelegramMessage(chatId, "⚠️ Not linked. Send `/link YOUR-CODE`.");
-  }
-
-  // Fix 4: Check if replying to a bot message → extract that event's ID
-  let replyEventId: string | null = null;
-  if (message.reply_to_message) {
-    replyEventId = extractEventIdFromReply(message.reply_to_message);
-  }
-
-  // Fix 5: Read caption from photos
-  const caption = message.caption || "";
-
-  if (message.text) {
-    await processEvent(chatId, { type: 'text', content: message.text }, profile, replyEventId);
-  } else if (message.voice) {
-    await processEvent(chatId, { type: 'voice', fileId: message.voice.file_id }, profile, replyEventId);
-  } else if (message.photo) {
-    const fileId = message.photo[message.photo.length - 1].file_id;
-    await processEvent(chatId, { type: 'photo', fileId, caption }, profile, replyEventId);
+async function executeTool(userId: string, toolName: string, args: any): Promise<any> {
+  switch (toolName) {
+    case "create_event": return await toolCreateEvent(userId, args);
+    case "get_events": return await toolGetEvents(userId, args);
+    case "update_event": return await toolUpdateEvent(userId, args);
+    case "delete_event": return await toolDeleteEvent(userId, args);
+    case "analyze_schedule": return await toolAnalyzeSchedule(userId, args);
+    default: return { error: `Unknown tool: ${toolName}` };
   }
 }
 
-async function processEvent(chatId: number, input: any, profile: any, replyEventId: string | null) {
-  try {
-    let textToParse = "";
-    let base64Image = "";
-    const todayStr = new Date().toLocaleDateString('en-CA');
+function buildSystemPrompt(todayStr: string) {
+  return `You are Maantis, a scheduling agent on Telegram. Today is ${todayStr}. Year is ${todayStr.split('-')[0]}.
 
-    if (input.type === 'text') {
-      textToParse = input.content;
-    } else if (input.type === 'voice') {
-      await sendTelegramMessage(chatId, "👂 Listening to your voice note...");
-      const fileUrl = await getTelegramFileUrl(input.fileId);
-      const response = await fetch(fileUrl);
-      const blob = await response.blob();
-      const file = new File([blob], "voice.ogg", { type: "audio/ogg" });
-      const transcription = await groq.audio.transcriptions.create({ file, model: "whisper-large-v3-turbo" });
-      textToParse = transcription.text;
-    } else if (input.type === 'photo') {
-      await sendTelegramMessage(chatId, "🔍 Analyzing photo...");
-      const fileUrl = await getTelegramFileUrl(input.fileId);
-      const response = await fetch(fileUrl);
-      const buffer = await response.arrayBuffer();
-      base64Image = encode(new Uint8Array(buffer));
-      // Fix 5: Include caption as text context
-      if (input.caption) textToParse = input.caption;
-    }
+You have FULL access to the user's calendar via tools. Act immediately.
 
-    const todayDateObj = new Date(todayStr + "T12:00:00Z");
+BEHAVIOR:
+- When user asks about events, schedules, birthdays, meetings, or anything calendar-related: IMMEDIATELY call get_events with appropriate query and/or date range. Do NOT ask permission. Do NOT say "let me check" or "please confirm". Just call the tool and return results.
+- For read operations (listing, searching, checking): NEVER ask confirmation. Just do it.
+- Only ask confirmation for DELETE operations.
+- Check conflicts before creating events.
 
-    // Context: last event OR replied-to event
-    let contextEvent = null;
-    let contextEventId = replyEventId || profile.last_event_id;
-    let lastEventContext = "None";
-    if (contextEventId) {
-      const { data } = await supabase.from('events').select('*').eq('id', contextEventId).single();
-      if (data) {
-        contextEvent = data;
-        lastEventContext = `ID: ${data.id}, Title: "${data.title}", Date: ${data.start_date.split('T')[0]}`;
-      }
-    }
+TOOL USAGE:
+- get_events: pass query for keyword search (e.g. query:"birthday"), date range for time filtering, or both. Backend filters server-side.
+- When user mentions multiple topics (e.g. "hiring challenges and meetups"), call get_events ONCE with a broad date range and no query, then filter the results yourself. Or call get_events multiple times with different queries.
+- All dates must use year ${todayStr.split('-')[0]}.
 
-    const systemPrompt = `
-You are a smart scheduling assistant. Today: ${todayStr}.
-${replyEventId ? `The user is REPLYING to this specific event → ${lastEventContext}. Treat as UPDATE unless clearly a new event.` : `Last Active Event: ${lastEventContext}.`}
-
-CRITICAL RULES:
-1. Separate the ANCHOR DATE from any OFFSET:
-   - "remind 3 days before the 21st" → intent: CREATE, event_date_reference: "21st", offset_days: -3
-   - "deadline May 15, remind a week early" → intent: CREATE, event_date_reference: "May 15", offset_days: -7  
-   - "meeting next Friday" → intent: CREATE, event_date_reference: "next Friday", offset_days: 0
-
-2. UPDATE means modifying the LAST ACTIVE EVENT. Use offset_days relative to that event:
-   - "make it a week earlier" → intent: UPDATE, event_date_reference: null, offset_days: -7
-   - "push it back 3 days" → intent: UPDATE, event_date_reference: null, offset_days: 3
-   - "change date to March 25" → intent: UPDATE, event_date_reference: "March 25", offset_days: 0
-   - IMPORTANT: If user says something like "make the month march but a week before" and the event is ALREADY in March, set event_date_reference to null, offset_days: -7. Do NOT set event_date_reference to just a month name like "March" — that would resolve to the 1st of the month.
-   - Only set event_date_reference to a SPECIFIC DATE (e.g., "March 25", "next Friday"), never just a bare month name.
-
-3. RESCHEDULE means finding an OLD event BY NAME and changing it:
-   - "reschedule my [event name] to Friday" → intent: RESCHEDULE, search_term: "[event name]"
-   - Only use RESCHEDULE when the user mentions a specific event name that is NOT the last active event.
-
-4. Do NOT invent event names. search_term must come from the user's actual words.
-
-Return JSON:
-{
-  "intent": "CREATE" | "UPDATE" | "LIST" | "DELETE" | "SEARCH" | "RESCHEDULE",
-  "title": string,
-  "event_date_reference": string or null,
-  "offset_days": number (default 0),
-  "time": string (HH:MM, default 09:00),
-  "description": string,
-  "category": string,
-  "recurrence": string,
-  "search_term": string,
-  "list_range": "day" | "week" | "month" | "all"
-}
-`;
-
-    let completion;
-    if (base64Image) {
-      const userContent: any[] = [];
-      if (textToParse) userContent.push({ type: "text", text: `Additional context from user: "${textToParse}". Extract event details from this image.` });
-      else userContent.push({ type: "text", text: "Extract event details from this image." });
-      userContent.push({ type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64Image}` } });
-      
-      completion = await groq.chat.completions.create({
-        messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userContent }],
-        model: "meta-llama/llama-4-scout-17b-16e-instruct",
-        response_format: { type: "json_object" },
-      });
-    } else {
-      completion = await groq.chat.completions.create({
-        messages: [{ role: "system", content: systemPrompt }, { role: "user", content: textToParse }],
-        model: "llama-3.1-8b-instant",
-        response_format: { type: "json_object" },
-      });
-    }
-
-    const parsed = JSON.parse(completion.choices[0]?.message?.content || "{}");
-    console.log("LLM Output:", JSON.stringify(parsed));
-
-    // ── Route by Intent ──
-    if (parsed.intent === "LIST") return await handleList(chatId, parsed, profile, todayDateObj);
-    if (parsed.intent === "SEARCH") return await handleSearch(chatId, parsed, profile);
-    if (parsed.intent === "DELETE") return await handleDelete(chatId, parsed, profile, todayDateObj);
-
-    // ── Deterministic Date Arithmetic ──
-    const offset = parseInt(parsed.offset_days) || 0;
-    let referenceDate = todayDateObj;
-    if ((parsed.intent === "UPDATE" || parsed.intent === "RESCHEDULE") && contextEvent) {
-      referenceDate = new Date(contextEvent.start_date);
-    }
-
-    // Detect bare month names that would resolve to the 1st of the month (e.g., "March", "April")
-    const bareMonthNames = ["january","february","march","april","may","june","july","august","september","october","november","december"];
-    let dateRef = parsed.event_date_reference;
-    if (dateRef && typeof dateRef === "string") {
-      const trimmed = dateRef.trim().toLowerCase();
-      if (bareMonthNames.includes(trimmed) && (parsed.intent === "UPDATE" || parsed.intent === "RESCHEDULE")) {
-        // Bare month name during UPDATE → ignore it, use offset from current event
-        dateRef = null;
-      }
-    }
-
-    if (dateRef && dateRef !== "null" && dateRef.trim() !== "") {
-      const anchorDate = chrono.parseDate(dateRef, referenceDate, { forwardDate: true });
-      if (anchorDate) {
-        const finalDate = new Date(anchorDate);
-        finalDate.setDate(finalDate.getDate() + offset);
-        parsed.date = finalDate.toISOString().split('T')[0];
-      }
-    } else if (offset !== 0 && contextEvent) {
-      // No explicit date given, but offset provided → apply offset to the CURRENT event's date
-      const currentDate = new Date(contextEvent.start_date);
-      currentDate.setDate(currentDate.getDate() + offset);
-      parsed.date = currentDate.toISOString().split('T')[0];
-    }
-    // Fallback for legacy field
-    if (!parsed.date && parsed.date_reference) {
-      const res = chrono.parseDate(parsed.date_reference, referenceDate, { forwardDate: true });
-      if (res) parsed.date = res.toISOString().split('T')[0];
-    }
-
-    // ── Fix 3: RESCHEDULE (search by name, then update) ──
-    if (parsed.intent === "RESCHEDULE") {
-      const term = parsed.search_term || parsed.title;
-      if (!term) return await sendTelegramMessage(chatId, "🤔 Which event should I reschedule? Give me the name.");
-      const { data: matches } = await supabase.from('events').select('*').eq('user_id', profile.id).ilike('title', `%${term}%`).limit(5);
-      if (!matches || matches.length === 0) return await sendTelegramMessage(chatId, `⚠️ No event matching "${term}" found.`);
-      if (matches.length > 1) {
-        const btns = matches.map(m => [{ text: `📝 ${m.title} (${m.start_date.split('T')[0]})`, callback_data: `resch_${m.id}_${parsed.date || ''}_${parsed.time || ''}` }]);
-        return await sendTelegramMessage(chatId, "Multiple matches. Which one to reschedule?", { inline_keyboard: btns });
-      }
-      const target = matches[0];
-      const updateData: any = {};
-      if (parsed.title && parsed.title.toLowerCase() !== term.toLowerCase()) updateData.title = parsed.title;
-      const resDate = parsed.date || target.start_date.split('T')[0];
-      const resTime = parsed.time || target.start_date.split('T')[1].substring(0, 5);
-      updateData.start_date = new Date(`${resDate}T${resTime}:00+05:30`).toISOString();
-      await supabase.from('events').update(updateData).eq('id', target.id);
-      await supabase.from('profiles').update({ last_event_id: target.id }).eq('id', profile.id);
-      return await sendTelegramMessage(chatId, `✅ *Rescheduled:* ${target.title}\n📅 ${resDate} @ ${resTime}`);
-    }
-
-    // ── UPDATE (last event or replied-to event) ──
-    if (parsed.intent === "UPDATE" && contextEventId && contextEvent) {
-      const updateData: any = {};
-      if (parsed.title) updateData.title = parsed.title;
-      const resDate = parsed.date || contextEvent.start_date.split('T')[0];
-      const resTime = parsed.time || contextEvent.start_date.split('T')[1].substring(0, 5);
-      updateData.start_date = new Date(`${resDate}T${resTime}:00+05:30`).toISOString();
-      await supabase.from('events').update(updateData).eq('id', contextEventId);
-      return await sendTelegramMessage(chatId, `✅ *Updated:* ${updateData.title || contextEvent.title}\n📅 ${resDate} @ ${resTime}`);
-    }
-
-    // ── CREATE ──
-    if (!parsed.title || !parsed.date) return await sendTelegramMessage(chatId, "🤔 I couldn't find clear event details. Could you be more specific?");
-    const { data, error } = await supabase.from('events').insert([{
-      user_id: profile.id,
-      title: parsed.title,
-      description: parsed.description || "",
-      start_date: new Date(`${parsed.date}T${parsed.time || '09:00'}:00+05:30`).toISOString(),
-      category: parsed.category || "",
-      recurrence: parsed.recurrence || "none"
-    }]).select().single();
-    if (!error) {
-      await supabase.from('profiles').update({ last_event_id: data.id }).eq('id', profile.id);
-      await sendTelegramMessage(chatId, `📅 *Saved:* ${parsed.title}\n📅 ${parsed.date} @ ${parsed.time || '09:00'}`, {
-        inline_keyboard: [[{ text: "🗑️ Delete", callback_data: `del_${data.id}` }]]
-      });
-    }
-  } catch (err: any) {
-    console.error(err);
-    await sendTelegramMessage(chatId, "⚠️ Sorry, something went wrong. (" + err.message + ")");
-  }
-}
-
-// ── LIST ──
-async function handleList(chatId: number, parsed: any, profile: any, today: Date) {
-  let query = supabase.from('events').select('*').eq('user_id', profile.id).order('start_date', { ascending: true });
-  if (parsed.event_date_reference || parsed.date_reference) {
-    const ref = parsed.event_date_reference || parsed.date_reference;
-    const resDate = chrono.parseDate(ref, today);
-    if (resDate) {
-      const start = new Date(resDate); start.setHours(0,0,0,0);
-      const end = new Date(resDate); end.setHours(23,59,59,999);
-      if (parsed.list_range === "month") { start.setDate(1); end.setMonth(end.getMonth() + 1); end.setDate(0); }
-      query = query.gte('start_date', start.toISOString()).lte('start_date', end.toISOString());
-    }
-  } else { query = query.gte('start_date', new Date().toISOString()); }
-  const { data: events } = await query.limit(15);
-  if (!events || events.length === 0) return await sendTelegramMessage(chatId, "📭 No events found.");
-  const list = events.map(e => `• *${e.title}*\n  📅 ${e.start_date.split('T')[0]} @ ${e.start_date.split('T')[1].substring(0,5)}`).join("\n\n");
-  await sendTelegramMessage(chatId, `🗓️ *Schedule:*\n\n${list}`);
-}
-
-// ── SEARCH ──
-async function handleSearch(chatId: number, parsed: any, profile: any) {
-  const term = parsed.search_term || parsed.title;
-  const { data: results } = await supabase.from('events').select('*').eq('user_id', profile.id).ilike('title', `%${term}%`).limit(5);
-  if (!results || results.length === 0) return await sendTelegramMessage(chatId, "🔍 No matching events found.");
-  const list = results.map(e => `• *${e.title}*\n  📅 ${e.start_date.split('T')[0]} @ ${e.start_date.split('T')[1].substring(0,5)}`).join("\n\n");
-  await sendTelegramMessage(chatId, `🔍 *Found:*\n\n${list}`);
-}
-
-// ── DELETE ──
-async function handleDelete(chatId: number, parsed: any, profile: any, today: Date) {
-  let query = supabase.from('events').select('*').eq('user_id', profile.id);
-  if (parsed.event_date_reference || parsed.date_reference) {
-    const ref = parsed.event_date_reference || parsed.date_reference;
-    const resDate = chrono.parseDate(ref, today);
-    if (resDate) {
-      const start = new Date(resDate); start.setHours(0,0,0,0);
-      const end = new Date(resDate); end.setHours(23,59,59,999);
-      query = query.gte('start_date', start.toISOString()).lte('start_date', end.toISOString());
-    }
-  }
-  if (parsed.search_term || parsed.title) query = query.ilike('title', `%${parsed.search_term || parsed.title}%`);
-  const { data: matches } = await query.limit(5);
-  if (!matches || matches.length === 0) return await sendTelegramMessage(chatId, "⚠️ Couldn't find that event to delete.");
-  if (matches.length > 1) {
-    const btns = matches.map(m => [{ text: `🗑️ ${m.title} (${m.start_date.split('T')[0]})`, callback_data: `del_${m.id}` }]);
-    return await sendTelegramMessage(chatId, "Multiple matches. Which to delete?", { inline_keyboard: btns });
-  }
-  await supabase.from('events').delete().eq('id', matches[0].id);
-  await sendTelegramMessage(chatId, `🗑️ Deleted: *${matches[0].title}*`);
-}
-
-// ── Helpers ──
-async function getTelegramFileUrl(fileId: string) {
-  const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getFile?file_id=${fileId}`);
-  const { result } = await res.json();
-  return `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${result.file_path}`;
-}
-
-async function handleCallbackQuery(callbackQuery: any) {
-  const chatId = callbackQuery.message.chat.id;
-  const data = callbackQuery.data;
-  if (data.startsWith('del_')) {
-    const eventId = data.split('_')[1];
-    await supabase.from('events').delete().eq('id', eventId);
-    await editTelegramMessage(chatId, callbackQuery.message.message_id, "🗑️ Event deleted.");
-  }
-  if (data.startsWith('resch_')) {
-    const parts = data.split('_');
-    const eventId = parts[1];
-    const newDate = parts[2] || null;
-    const newTime = parts[3] || null;
-    if (newDate || newTime) {
-      const { data: target } = await supabase.from('events').select('*').eq('id', eventId).single();
-      if (target) {
-        const resDate = newDate || target.start_date.split('T')[0];
-        const resTime = newTime || target.start_date.split('T')[1].substring(0, 5);
-        await supabase.from('events').update({ start_date: new Date(`${resDate}T${resTime}:00+05:30`).toISOString() }).eq('id', eventId);
-        await editTelegramMessage(chatId, callbackQuery.message.message_id, `✅ Rescheduled: *${target.title}* → ${resDate} @ ${resTime}`);
-      }
-    }
-  }
+CONTEXT:
+- If user replies "yes", "ok", "sure", "list them": continue your previous task immediately. Do NOT restart the conversation.
+- Return ONLY data from tool responses. Never invent events.
+- Be concise. Give direct answers.`;
 }
 
 async function sendTelegramMessage(chatId: number, text: string, replyMarkup?: any) {
@@ -377,10 +317,168 @@ async function sendTelegramMessage(chatId: number, text: string, replyMarkup?: a
   });
 }
 
-async function editTelegramMessage(chatId: number, messageId: number, text: string) {
-  await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/editMessageText`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, message_id: messageId, text, parse_mode: 'Markdown' }),
-  });
+async function getTelegramFileUrl(fileId: string) {
+  const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getFile?file_id=${fileId}`);
+  const { result } = await res.json();
+  return `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${result.file_path}`;
 }
+
+async function runAgent(userId: string, userMessage: string, history: any[] = []): Promise<string> {
+  const todayStr = new Date().toLocaleDateString('en-CA');
+  const messages: any[] = [
+    { role: "system", content: buildSystemPrompt(todayStr) },
+    ...history,
+    { role: "user", content: userMessage },
+  ];
+
+  let maxSteps = 5;
+  let finalResponse = "";
+
+  while (maxSteps--) {
+    let completion;
+    try {
+      completion = await groq.chat.completions.create({
+        messages,
+        model: "llama-3.3-70b-versatile",
+        tools: toolDefinitions,
+        tool_choice: "auto",
+        temperature: 0.2,
+      });
+    } catch (apiErr: any) {
+      console.error("Groq API error, retrying without tools:", apiErr.message);
+      const fallback = await groq.chat.completions.create({
+        messages,
+        model: "llama-3.3-70b-versatile",
+        temperature: 0.2,
+      });
+      finalResponse = fallback.choices[0]?.message?.content || "Sorry, I could not process that request.";
+      break;
+    }
+
+    const choice = completion.choices[0];
+
+    if (!choice.message.tool_calls || choice.message.tool_calls.length === 0) {
+      finalResponse = choice.message.content || "";
+      break;
+    }
+
+    messages.push(choice.message);
+
+    for (const toolCall of choice.message.tool_calls) {
+      const fnName = toolCall.function.name;
+      const fnArgs = JSON.parse(toolCall.function.arguments);
+
+      console.log("Tool:", fnName, JSON.stringify(fnArgs));
+
+      let result: any;
+      try {
+        result = await executeTool(userId, fnName, fnArgs);
+      } catch (e: any) {
+        console.error("Tool error:", fnName, e.message);
+        result = { error: "Tool execution failed: " + e.message };
+      }
+
+      console.log("Result:", JSON.stringify(result));
+
+      messages.push({
+        role: "tool",
+        tool_call_id: toolCall.id,
+        name: fnName,
+        content: JSON.stringify(result),
+      });
+    }
+  }
+
+  if (!finalResponse && messages.length > 2) {
+    const summary = await groq.chat.completions.create({
+      messages: [...messages, { role: "user", content: "Summarize what you just did in one concise sentence." }],
+      model: "llama-3.3-70b-versatile",
+      temperature: 0.2,
+    });
+    finalResponse = summary.choices[0]?.message?.content || "Done.";
+  }
+
+  return finalResponse;
+}
+
+async function handleMessage(message: any) {
+  const chatId = message.chat.id;
+  const { data: profile } = await supabase.from('profiles').select('id, username, conversation_history').eq('telegram_chat_id', chatId).single();
+
+  if (!profile) {
+    const text = message.text;
+    if (text?.startsWith('/link') || text?.startsWith('/start')) {
+      const parts = text.split(' ');
+      const code = parts.length > 1 ? parts[1] : null;
+      if (code && !code.includes('@')) {
+        const { data: userData } = await supabase.from('profiles').update({ telegram_chat_id: chatId, link_code: null }).eq('link_code', code.trim().toUpperCase()).select('username').single();
+        if (userData) return await sendTelegramMessage(chatId, `Linked! Welcome @${userData.username}.\n\nYou can now send me events like:\n- "Lunch with Sarah tomorrow at 1pm"\n- Send a voice note\n- Send a photo of a flyer`);
+      }
+      return await sendTelegramMessage(chatId, "Welcome! Send /link YOUR-CODE from the web app.");
+    }
+    return await sendTelegramMessage(chatId, "Not linked. Send /link YOUR-CODE.");
+  }
+
+  let userMessage = "";
+
+  if (message.text) {
+    userMessage = message.text;
+  } else if (message.voice) {
+    const fileUrl = await getTelegramFileUrl(message.voice.file_id);
+    const response = await fetch(fileUrl);
+    const buffer = await response.arrayBuffer();
+    const file = new File([buffer], "voice.ogg", { type: "audio/ogg" });
+    const transcription = await groq.audio.transcriptions.create({ file, model: "whisper-large-v3-turbo" });
+    userMessage = transcription.text;
+  } else if (message.photo) {
+    const fileId = message.photo[message.photo.length - 1].file_id;
+    const fileUrl = await getTelegramFileUrl(fileId);
+    const response = await fetch(fileUrl);
+    const buffer = await response.arrayBuffer();
+    const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+
+    const visionCompletion = await groq.chat.completions.create({
+      messages: [
+        { role: "user", content: [
+          { type: "text", text: `Extract any event details from this image. ${message.caption || ""}` },
+          { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64}` } },
+        ]},
+      ],
+      model: "meta-llama/llama-4-scout-17b-16e-instruct",
+    });
+    userMessage = visionCompletion.choices[0]?.message?.content || message.caption || "";
+  }
+
+  if (!userMessage.trim()) return;
+
+  let history: any[] = [];
+  try {
+    history = JSON.parse(profile.conversation_history || "[]");
+  } catch { history = []; }
+
+  try {
+    const agentResponse = await runAgent(profile.id, userMessage, history);
+    await sendTelegramMessage(chatId, agentResponse || "Done.");
+
+    history.push({ role: "user", content: userMessage });
+    history.push({ role: "assistant", content: agentResponse });
+    if (history.length > 6) history = history.slice(-6);
+
+    await supabase.from('profiles').update({ conversation_history: JSON.stringify(history) }).eq('id', profile.id);
+  } catch (err: any) {
+    console.error("Agent error:", err);
+    await sendTelegramMessage(chatId, "Sorry, something went wrong: " + err.message);
+  }
+}
+
+serve(async (req: any) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+  try {
+    const update = await req.json();
+    if (update.message) await handleMessage(update.message);
+    return new Response(JSON.stringify({ ok: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 });
+  } catch (error: any) {
+    console.error("Update Error:", error);
+    return new Response(JSON.stringify({ error: error.message }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 });
+  }
+});

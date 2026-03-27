@@ -23,16 +23,16 @@ const toolDefinitions = [
     type: "function" as const,
     function: {
       name: "create_event",
-      description: "Create a new calendar event. Backend automatically checks for conflicts before creating.",
+      description: "Create event. Auto-checks conflicts.",
       parameters: {
         type: "object",
         properties: {
-          title: { type: "string", description: "Event title" },
-          date: { type: "string", description: "Date in YYYY-MM-DD format" },
-          time: { type: "string", description: "Time in HH:MM format (24h). Default 09:00" },
-          description: { type: "string", description: "Event description" },
-          category: { type: "string", enum: ["work", "personal", "family", "health", "social", ""], description: "Event category" },
-          recurrence: { type: "string", enum: ["none", "daily", "weekly", "monthly", "yearly"], description: "Recurrence pattern. Default none" },
+          title: { type: "string" },
+          date: { type: "string", description: "YYYY-MM-DD" },
+          time: { type: "string", description: "HH:MM 24h. Default 09:00" },
+          description: { type: "string" },
+          category: { type: "string", enum: ["work", "personal", "family", "health", "social", ""] },
+          recurrence: { type: "string", enum: ["none", "daily", "weekly", "monthly", "yearly"] },
         },
         required: ["title", "date"],
       },
@@ -42,15 +42,14 @@ const toolDefinitions = [
     type: "function" as const,
     function: {
       name: "get_events",
-      description: "Fetch calendar events within a date range. Use to check schedule, find conflicts, or list events.",
+      description: "Fetch events. Supports date range, keyword search, or both. At least one of start_date or query is required.",
       parameters: {
         type: "object",
         properties: {
-          start_date: { type: "string", description: "Start date (YYYY-MM-DD)" },
-          end_date: { type: "string", description: "End date (YYYY-MM-DD)" },
-          search_term: { type: "string", description: "Optional: filter by title (fuzzy match)" },
+          start_date: { type: "string", description: "YYYY-MM-DD" },
+          end_date: { type: "string", description: "YYYY-MM-DD" },
+          query: { type: "string", description: "Keyword to search in title, category, description" },
         },
-        required: ["start_date", "end_date"],
       },
     },
   },
@@ -58,16 +57,16 @@ const toolDefinitions = [
     type: "function" as const,
     function: {
       name: "update_event",
-      description: "Update an existing event. Pass the event_id and any fields to change.",
+      description: "Update event fields by event_id.",
       parameters: {
         type: "object",
         properties: {
-          event_id: { type: "string", description: "The UUID of the event to update" },
-          title: { type: "string", description: "New title (optional)" },
-          date: { type: "string", description: "New date YYYY-MM-DD (optional)" },
-          time: { type: "string", description: "New time HH:MM (optional)" },
-          description: { type: "string", description: "New description (optional)" },
-          category: { type: "string", description: "New category (optional)" },
+          event_id: { type: "string" },
+          title: { type: "string" },
+          date: { type: "string", description: "YYYY-MM-DD" },
+          time: { type: "string", description: "HH:MM" },
+          description: { type: "string" },
+          category: { type: "string" },
         },
         required: ["event_id"],
       },
@@ -77,12 +76,12 @@ const toolDefinitions = [
     type: "function" as const,
     function: {
       name: "delete_event",
-      description: "Delete an event. First call returns event details for confirmation. Call again with confirmed=true to actually delete.",
+      description: "Delete event. Returns details first. Pass confirmed=true to confirm.",
       parameters: {
         type: "object",
         properties: {
-          event_id: { type: "string", description: "UUID of event to delete" },
-          confirmed: { type: "boolean", description: "Set to true to confirm deletion. Default false." },
+          event_id: { type: "string" },
+          confirmed: { type: "boolean" },
         },
         required: ["event_id"],
       },
@@ -92,12 +91,12 @@ const toolDefinitions = [
     type: "function" as const,
     function: {
       name: "analyze_schedule",
-      description: "Analyze the user's schedule. Returns busiest day, free slots, conflicts, and total events for the given period.",
+      description: "Analyze schedule: busiest day, free slots, conflicts.",
       parameters: {
         type: "object",
         properties: {
-          start_date: { type: "string", description: "Analysis period start (YYYY-MM-DD)" },
-          end_date: { type: "string", description: "Analysis period end (YYYY-MM-DD)" },
+          start_date: { type: "string", description: "YYYY-MM-DD" },
+          end_date: { type: "string", description: "YYYY-MM-DD" },
         },
         required: ["start_date", "end_date"],
       },
@@ -155,29 +154,29 @@ async function toolCreateEvent(userId: string, args: any) {
 }
 
 async function toolGetEvents(userId: string, args: any) {
-  const start = new Date(`${args.start_date}T00:00:00+05:30`).toISOString();
-  const end = new Date(`${args.end_date}T23:59:59+05:30`).toISOString();
-
   let query = supabase.from('events').select('*').eq('user_id', userId)
-    .gte('start_date', start).lte('start_date', end)
     .order('start_date', { ascending: true });
 
-  if (args.search_term) {
-    query = query.ilike('title', `%${args.search_term}%`);
+  if (args.start_date && args.end_date) {
+    const start = new Date(`${args.start_date}T00:00:00+05:30`).toISOString();
+    const end = new Date(`${args.end_date}T23:59:59+05:30`).toISOString();
+    query = query.gte('start_date', start).lte('start_date', end);
+  }
+
+  if (args.query) {
+    query = query.or(`title.ilike.%${args.query}%,category.ilike.%${args.query}%,description.ilike.%${args.query}%`);
   }
 
   const { data, error } = await query.limit(20);
   if (error) return { error: error.message };
+  if (!data || data.length === 0) return { count: 0, events: [], message: "No matching events found." };
 
   return {
-    count: data?.length || 0,
-    events: (data || []).map(e => ({
-      id: e.id,
-      title: e.title,
+    count: data.length,
+    events: data.map((e: any) => ({
+      id: e.id, title: e.title,
       date: e.start_date.split('T')[0],
       time: e.start_date.split('T')[1].substring(0, 5),
-      category: e.category || "",
-      description: e.description || "",
     })),
   };
 }
@@ -291,21 +290,25 @@ async function executeTool(userId: string, toolName: string, args: any): Promise
 }
 
 function buildSystemPrompt(todayStr: string) {
-  return `You are Maantis, an AI scheduling assistant. Today is ${todayStr}.
+  return `You are Maantis, a scheduling agent. Today is ${todayStr}. Year is ${todayStr.split('-')[0]}.
 
-You can: create, update, delete events, analyze schedules, detect conflicts.
+You have FULL access to the user's calendar via tools. Act immediately.
 
-RULES:
-1. ALWAYS call get_events before creating to check for time conflicts.
-2. If a conflict exists, suggest 2-3 alternative times. Do NOT auto-create over a conflict.
-3. For DELETE: show what will be deleted and ask "Should I proceed?". Only call delete_event with confirmed=true after the user says yes.
-4. Use tools whenever real data is needed. NEVER guess or hallucinate event data.
-5. Be concise but helpful.
-6. When resolving dates like "tomorrow", "next Friday", compute the actual YYYY-MM-DD date.
-7. For "plan my week" or "what's my schedule": call get_events with the appropriate date range.
-8. For "when am I most busy?" or schedule insights: call analyze_schedule.
-9. If user says "move/reschedule [event]": first get_events to find it, then update_event.
-10. Always respond with the final result in natural language.`;
+BEHAVIOR:
+- When user asks about events, schedules, birthdays, meetings, or anything calendar-related: IMMEDIATELY call get_events with appropriate query and/or date range. Do NOT ask permission. Do NOT say "let me check" or "please confirm". Just call the tool and return results.
+- For read operations (listing, searching, checking): NEVER ask confirmation. Just do it.
+- Only ask confirmation for DELETE operations.
+- Check conflicts before creating events.
+
+TOOL USAGE:
+- get_events: pass query for keyword search (e.g. query:"birthday"), date range for time filtering, or both. Backend filters server-side.
+- When user mentions multiple topics (e.g. "hiring challenges and meetups"), call get_events ONCE with a broad date range and no query, then filter the results yourself. Or call get_events multiple times with different queries.
+- All dates must use year ${todayStr.split('-')[0]}.
+
+CONTEXT:
+- If user replies "yes", "ok", "sure", "list them": continue your previous task immediately. Do NOT restart the conversation.
+- Return ONLY data from tool responses. Never invent events.
+- Be concise. Give direct answers.`;
 }
 
 serve(async (req: any) => {
@@ -361,13 +364,25 @@ serve(async (req: any) => {
     const toolCalls: any[] = [];
 
     while (maxSteps--) {
-      const completion = await groq.chat.completions.create({
-        messages,
-        model: "llama-3.3-70b-versatile",
-        tools: toolDefinitions,
-        tool_choice: "auto",
-        temperature: 0.2,
-      });
+      let completion;
+      try {
+        completion = await groq.chat.completions.create({
+          messages,
+          model: "llama-3.3-70b-versatile",
+          tools: toolDefinitions,
+          tool_choice: "auto",
+          temperature: 0.2,
+        });
+      } catch (apiErr: any) {
+        console.error("Groq API error, retrying without tools:", apiErr.message);
+        const fallback = await groq.chat.completions.create({
+          messages,
+          model: "llama-3.3-70b-versatile",
+          temperature: 0.2,
+        });
+        finalResponse = fallback.choices[0]?.message?.content || "Sorry, I could not process that request.";
+        break;
+      }
 
       const choice = completion.choices[0];
 
@@ -402,6 +417,15 @@ serve(async (req: any) => {
           content: JSON.stringify(result),
         });
       }
+    }
+
+    if (!finalResponse && messages.length > 2) {
+      const summary = await groq.chat.completions.create({
+        messages: [...messages, { role: "user", content: "Summarize what you just did in one concise sentence." }],
+        model: "llama-3.3-70b-versatile",
+        temperature: 0.2,
+      });
+      finalResponse = summary.choices[0]?.message?.content || "Done.";
     }
 
     return new Response(JSON.stringify({

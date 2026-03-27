@@ -6,24 +6,34 @@
 ![TailwindCSS](https://img.shields.io/badge/tailwindcss-%2338B2AC.svg?style=for-the-badge&logo=tailwind-css&logoColor=white)
 ![Supabase](https://img.shields.io/badge/Supabase-3ECF8E?style=for-the-badge&logo=supabase&logoColor=white)
 
-A modern, responsive, and dynamic Event Scheduling application built with React, Vite, TypeScript, and Supabase. The application allows users to manage their events seamlessly, featuring an intuitive calendar interface, categorical filtering, search functionality, and automated Telegram notifications.
+A modern, responsive, and dynamic Event Scheduling application built with React, Vite, TypeScript, and Supabase. The application allows users to manage their events seamlessly using AI-powered natural language processing, voice commands, and image recognition.
 
 ## Live Demo
 
 - **Web Application:** [https://smart-scheduling.vercel.app/](https://smart-scheduling.vercel.app/)
 - **Telegram Bot:** [@Maantisbot](https://t.me/Maantisbot) (Link: [https://t.me/Maantisbot](https://t.me/Maantisbot))
 
-
 ## Features
 
+- **AI Event Parsing:** Create structured events from raw text, voice, or images using LLMs.
+- **Voice-to-Event:** Record your voice and let the AI transcribe and schedule the event automatically.
+- **Image/OCR Scheduling:** Take a picture of a physical note or schedule and extract event details instantly.
 - **User Authentication:** Secure signup and login using Supabase Auth.
 - **Guest Mode:** Experience the app without creating an account (events are stored in-memory).
 - **Interactive Calendar:** Visual event calendar for easy date selection and event viewing.
-- **Event Management:** Add, edit, and delete events with details like title, description, category, and date.
 - **Telegram Notifications:** Get notified via Telegram bot when an event starts.
 - **Advanced Filtering & Search:** Search events by keyword and filter them by custom categories.
 - **Responsive Design:** Fully responsive UI built with Tailwind CSS and Shadcn UI components.
-- **Real-time Toasts:** Instant feedback on user actions using Sonner.
+
+## AI Capabilities
+
+The "Smart" in Smart Scheduling is powered by a robust AI pipeline:
+
+- **Natural Language Processing:** Powered by Groq (Llama 3.1 8B) to extract titles, dates, times, and categories from unstructured text.
+- **Voice Transcription:** Utilizes Groq Whisper (whisper-large-v3-turbo) for high-accuracy voice-to-text conversion.
+- **Date Intelligence:** Combines LLM analysis with Chrono-node for precise, deterministic date and recurrence calculations.
+- **OCR (Optical Character Recognition):** Integrated with Tesseract.js to process images and extract textual event data.
+
 
 ## Tech Stack
 
@@ -72,6 +82,7 @@ erDiagram
 
 The application leverages Supabase Edge Functions and `pg_cron` for background tasks:
 
+- **analyze-event:** An Edge Function that utilizes Groq Llama and Whisper models to parse events from text and audio inputs.
 - **send-notifications:** An Edge Function that scans for upcoming events and sends Telegram messages to users with linked accounts.
 - **pg_cron:** Managed via the `process-notifications-every-minute` job, which triggers the notification engine every minute.
 
@@ -109,14 +120,18 @@ Ensure you have the following installed on your local machine:
    VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
    ```
 
-### Telegram Bot Setup
+## Setup Secrets
 
-To enable notifications, you must configure a Telegram Bot:
+To enable full functionality, you must configure the following Supabase Secrets:
 
-1. Create a bot using [@BotFather](https://t.me/botfather) and obtain the `TELEGRAM_BOT_TOKEN`.
-2. Set the token in your Supabase project secrets:
+1. **Telegram Notifications:** Create a bot via [@BotFather](https://t.me/botfather) and set the token:
    ```bash
    supabase secrets set TELEGRAM_BOT_TOKEN=your_token
+   ```
+
+2. **Groq AI Capabilities:** Obtain an API key from Groq Console and set it:
+   ```bash
+   supabase secrets set GROQ_API_KEY=your_key
    ```
 
 4. **Start the Development Server:**
