@@ -15,6 +15,7 @@ A modern, responsive, and dynamic Event Scheduling application built with React,
 
 ## Features
 
+- **Conversational AI Agent:** Interact with an intelligent chatbot interface (`ChatPanel`) that manages context, processes intents, and handles multi-turn scheduling entirely with natural language.
 - **AI Event Parsing:** Create structured events from raw text, voice, or images using LLMs.
 - **Voice-to-Event:** Record your voice and let the AI transcribe and schedule the event automatically.
 - **Image/OCR Scheduling:** Take a picture of a physical note or schedule and extract event details instantly.
@@ -60,6 +61,8 @@ erDiagram
         bigint telegram_chat_id "Linked Telegram Chat ID"
         text link_code "Unique linking code for Telegram"
         uuid last_event_id FK "Reference to the last interacted event"
+        text last_bot_response "Text of the most recent agent response"
+        text conversation_history "JSON structure storing sequential user-agent chat history"
     }
 
     events {
@@ -82,6 +85,7 @@ erDiagram
 
 The application leverages Supabase Edge Functions and `pg_cron` for background tasks:
 
+- **agent:** A state-aware conversational routing function that interprets advanced temporal logic, handles complex intents, and drives the chatbot UI.
 - **analyze-event:** An Edge Function that utilizes Groq Llama and Whisper models to parse events from text and audio inputs.
 - **send-notifications:** An Edge Function that scans for upcoming events and sends Telegram messages to users with linked accounts.
 - **pg_cron:** Managed via the `process-notifications-every-minute` job, which triggers the notification engine every minute.
