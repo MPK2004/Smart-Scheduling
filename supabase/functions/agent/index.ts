@@ -1,10 +1,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
+import { encode } from "https://deno.land/std@0.168.0/encoding/base64.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.7"
 import Groq from "npm:groq-sdk"
+import * as chrono from "npm:chrono-node"
 
 declare const Deno: { env: { get(name: string): string | undefined } };
 
-const TELEGRAM_BOT_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY")!;
@@ -281,7 +282,8 @@ async function toolAnalyzeSchedule(userId: string, args: any) {
   }
 
   const freeSlots: any[] = [];
-  for (const day of Object.keys(dayCounts)) {
+  const allDays = Object.keys(dayCounts);
+  for (const day of allDays) {
     const busyHours = new Set(dayEvents[day].map(e => parseInt(e.time.split(':')[0])));
     const slots: string[] = [];
     for (let h = 9; h < 18; h++) {
@@ -310,7 +312,7 @@ async function executeTool(userId: string, toolName: string, args: any): Promise
 }
 
 function buildSystemPrompt(todayStr: string) {
-  return `You are Maantis, a scheduling agent on Telegram. Today is ${todayStr}. Year is ${todayStr.split('-')[0]}.
+  return `You are Maantis, a scheduling agent. Today is ${todayStr}. Year is ${todayStr.split('-')[0]}.
 
 You have FULL access to the user's calendar via tools. Act immediately.
 
@@ -332,176 +334,137 @@ CONTEXT:
 - Be concise. Give direct answers.`;
 }
 
-async function sendTelegramMessage(chatId: number, text: string, replyMarkup?: any) {
-  await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown', reply_markup: replyMarkup }),
-  });
-}
-
-async function getTelegramFileUrl(fileId: string) {
-  const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getFile?file_id=${fileId}`);
-  const { result } = await res.json();
-  return `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${result.file_path}`;
-}
-
-async function runAgent(userId: string, userMessage: string, history: any[] = []): Promise<string> {
-  const todayStr = new Date().toLocaleDateString('en-CA');
-  const messages: any[] = [
-    { role: "system", content: buildSystemPrompt(todayStr) },
-    ...history,
-    { role: "user", content: userMessage },
-  ];
-
-  let maxSteps = 5;
-  let finalResponse = "";
-
-  while (maxSteps--) {
-    let completion;
-    try {
-      completion = await groq.chat.completions.create({
-        messages,
-        model: "llama-3.3-70b-versatile",
-        tools: toolDefinitions,
-        tool_choice: "auto",
-        temperature: 0.2,
-      });
-    } catch (apiErr: any) {
-      console.error("Groq API error, retrying without tools:", apiErr.message);
-      const fallback = await groq.chat.completions.create({
-        messages,
-        model: "llama-3.3-70b-versatile",
-        temperature: 0.2,
-      });
-      finalResponse = fallback.choices[0]?.message?.content || "Sorry, I could not process that request.";
-      break;
-    }
-
-    const choice = completion.choices[0];
-
-    if (!choice.message.tool_calls || choice.message.tool_calls.length === 0) {
-      finalResponse = choice.message.content || "";
-      break;
-    }
-
-    messages.push(choice.message);
-
-    for (const toolCall of choice.message.tool_calls) {
-      const fnName = toolCall.function.name;
-      const fnArgs = JSON.parse(toolCall.function.arguments);
-
-      console.log("Tool:", fnName, JSON.stringify(fnArgs));
-
-      let result: any;
-      try {
-        result = await executeTool(userId, fnName, fnArgs);
-      } catch (e: any) {
-        console.error("Tool error:", fnName, e.message);
-        result = { error: "Tool execution failed: " + e.message };
-      }
-
-      console.log("Result:", JSON.stringify(result));
-
-      messages.push({
-        role: "tool",
-        tool_call_id: toolCall.id,
-        name: fnName,
-        content: JSON.stringify(result),
-      });
-    }
-  }
-
-  if (!finalResponse && messages.length > 2) {
-    const summary = await groq.chat.completions.create({
-      messages: [...messages, { role: "user", content: "Summarize what you just did in one concise sentence." }],
-      model: "llama-3.3-70b-versatile",
-      temperature: 0.2,
-    });
-    finalResponse = summary.choices[0]?.message?.content || "Done.";
-  }
-
-  return finalResponse;
-}
-
-async function handleMessage(message: any) {
-  const chatId = message.chat.id;
-  const { data: profile } = await supabase.from('profiles').select('id, username, conversation_history').eq('telegram_chat_id', chatId).single();
-
-  if (!profile) {
-    const text = message.text;
-    if (text?.startsWith('/link') || text?.startsWith('/start')) {
-      const parts = text.split(' ');
-      const code = parts.length > 1 ? parts[1] : null;
-      if (code && !code.includes('@')) {
-        const { data: userData } = await supabase.from('profiles').update({ telegram_chat_id: chatId, link_code: null }).eq('link_code', code.trim().toUpperCase()).select('username').single();
-        if (userData) return await sendTelegramMessage(chatId, `Linked! Welcome @${userData.username}.\n\nYou can now send me events like:\n- "Lunch with Sarah tomorrow at 1pm"\n- Send a voice note\n- Send a photo of a flyer`);
-      }
-      return await sendTelegramMessage(chatId, "Welcome! Send /link YOUR-CODE from the web app.");
-    }
-    return await sendTelegramMessage(chatId, "Not linked. Send /link YOUR-CODE.");
-  }
-
-  let userMessage = "";
-
-  if (message.text) {
-    userMessage = message.text;
-  } else if (message.voice) {
-    const fileUrl = await getTelegramFileUrl(message.voice.file_id);
-    const response = await fetch(fileUrl);
-    const buffer = await response.arrayBuffer();
-    const file = new File([buffer], "voice.ogg", { type: "audio/ogg" });
-    const transcription = await groq.audio.transcriptions.create({ file, model: "whisper-large-v3-turbo" });
-    userMessage = transcription.text;
-  } else if (message.photo) {
-    const fileId = message.photo[message.photo.length - 1].file_id;
-    const fileUrl = await getTelegramFileUrl(fileId);
-    const response = await fetch(fileUrl);
-    const buffer = await response.arrayBuffer();
-    const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
-
-    const visionCompletion = await groq.chat.completions.create({
-      messages: [
-        { role: "user", content: [
-          { type: "text", text: `Extract any event details from this image. ${message.caption || ""}` },
-          { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64}` } },
-        ]},
-      ],
-      model: "meta-llama/llama-4-scout-17b-16e-instruct",
-    });
-    userMessage = visionCompletion.choices[0]?.message?.content || message.caption || "";
-  }
-
-  if (!userMessage.trim()) return;
-
-  let history: any[] = [];
-  try {
-    history = JSON.parse(profile.conversation_history || "[]");
-  } catch { history = []; }
-
-  try {
-    const agentResponse = await runAgent(profile.id, userMessage, history);
-    await sendTelegramMessage(chatId, agentResponse || "Done.");
-
-    history.push({ role: "user", content: userMessage });
-    history.push({ role: "assistant", content: agentResponse });
-    if (history.length > 6) history = history.slice(-6);
-
-    await supabase.from('profiles').update({ conversation_history: JSON.stringify(history) }).eq('id', profile.id);
-  } catch (err: any) {
-    console.error("Agent error:", err);
-    await sendTelegramMessage(chatId, "Sorry, something went wrong: " + err.message);
-  }
-}
-
 serve(async (req: any) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+
   try {
-    const update = await req.json();
-    if (update.message) await handleMessage(update.message);
-    return new Response(JSON.stringify({ ok: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 });
+    const body = await req.json();
+    const { user_id, message, input_type, file_data, conversation_history } = body;
+
+    if (!user_id) return new Response(JSON.stringify({ error: "user_id required" }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+
+    const todayStr = new Date().toLocaleDateString('en-CA');
+    let userMessage = message || "";
+
+    if (input_type === "voice" && file_data) {
+      const binaryData = Uint8Array.from(atob(file_data), c => c.charCodeAt(0));
+      const file = new File([binaryData], "voice.ogg", { type: "audio/ogg" });
+      const transcription = await groq.audio.transcriptions.create({ file, model: "whisper-large-v3-turbo" });
+      userMessage = transcription.text;
+    }
+
+    if (input_type === "image" && file_data) {
+      const visionCompletion = await groq.chat.completions.create({
+        messages: [
+          { role: "user", content: [
+            { type: "text", text: `Extract any event details (title, date, time, location) from this image. ${userMessage ? "Additional context: " + userMessage : ""}` },
+            { type: "image_url", image_url: { url: `data:image/jpeg;base64,${file_data}` } },
+          ]},
+        ],
+        model: "meta-llama/llama-4-scout-17b-16e-instruct",
+      });
+      userMessage = visionCompletion.choices[0]?.message?.content || userMessage;
+    }
+
+    if (!userMessage.trim()) {
+      return new Response(JSON.stringify({ error: "No message provided" }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    const messages: any[] = [
+      { role: "system", content: buildSystemPrompt(todayStr) },
+    ];
+
+    if (conversation_history && Array.isArray(conversation_history)) {
+      for (const msg of conversation_history) {
+        messages.push(msg);
+      }
+    }
+
+    messages.push({ role: "user", content: userMessage });
+
+    let maxSteps = 5;
+    let finalResponse = "";
+    const toolCalls: any[] = [];
+
+    while (maxSteps--) {
+      let completion;
+      try {
+        completion = await groq.chat.completions.create({
+          messages,
+          model: "llama-3.3-70b-versatile",
+          tools: toolDefinitions,
+          tool_choice: "auto",
+          temperature: 0.2,
+        });
+      } catch (apiErr: any) {
+        console.error("Groq API error, retrying without tools:", apiErr.message);
+        const fallback = await groq.chat.completions.create({
+          messages,
+          model: "llama-3.3-70b-versatile",
+          temperature: 0.2,
+        });
+        finalResponse = fallback.choices[0]?.message?.content || "Sorry, I could not process that request.";
+        break;
+      }
+
+      const choice = completion.choices[0];
+
+      if (!choice.message.tool_calls || choice.message.tool_calls.length === 0) {
+        finalResponse = choice.message.content || "";
+        break;
+      }
+
+      messages.push(choice.message);
+
+      for (const toolCall of choice.message.tool_calls) {
+        const fnName = toolCall.function.name;
+        const fnArgs = JSON.parse(toolCall.function.arguments);
+
+        console.log("Tool:", fnName, JSON.stringify(fnArgs));
+        toolCalls.push({ tool: fnName, args: fnArgs });
+
+        let result: any;
+        try {
+          result = await executeTool(user_id, fnName, fnArgs);
+        } catch (e: any) {
+          console.error("Tool error:", fnName, e.message);
+          result = { error: "Tool execution failed: " + e.message };
+        }
+
+        console.log("Result:", JSON.stringify(result));
+
+        messages.push({
+          role: "tool",
+          tool_call_id: toolCall.id,
+          name: fnName,
+          content: JSON.stringify(result),
+        });
+      }
+    }
+
+    if (!finalResponse && messages.length > 2) {
+      const summary = await groq.chat.completions.create({
+        messages: [...messages, { role: "user", content: "Summarize what you just did in one concise sentence." }],
+        model: "llama-3.3-70b-versatile",
+        temperature: 0.2,
+      });
+      finalResponse = summary.choices[0]?.message?.content || "Done.";
+    }
+
+    return new Response(JSON.stringify({
+      response: finalResponse,
+      tool_calls_made: toolCalls,
+      transcription: input_type === "voice" ? userMessage : undefined,
+    }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      status: 200,
+    });
+
   } catch (error: any) {
-    console.error("Update Error:", error);
-    return new Response(JSON.stringify({ error: error.message }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 });
+    console.error("Agent Error:", error);
+    return new Response(JSON.stringify({ error: error.message }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      status: 500,
+    });
   }
 });

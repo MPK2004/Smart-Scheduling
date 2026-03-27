@@ -1,16 +1,14 @@
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Plus, Mic, Image, MessageSquare, Send } from "lucide-react";
+import { Plus, MessageCircle, Send } from "lucide-react";
 
 interface QuickActionsProps {
   onAddEvent: () => void;
-  onVoiceClick: () => void;
-  onImageClick: () => void;
-  onTextClick: () => void;
+  onChatClick: () => void;
   onTelegramClick: () => void;
 }
 
-const QuickActions = ({ onAddEvent, onVoiceClick, onImageClick, onTextClick, onTelegramClick }: QuickActionsProps) => {
+const QuickActions = ({ onAddEvent, onChatClick, onTelegramClick }: QuickActionsProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -38,15 +36,17 @@ const QuickActions = ({ onAddEvent, onVoiceClick, onImageClick, onTextClick, onT
             variant="outline"
             size="icon"
             className="rounded-full shadow-md w-14 h-14 bg-background"
-            onClick={() => { setIsOpen(false); onTextClick(); }}
+            onClick={() => { setIsOpen(false); onAddEvent(); }}
+            title="Add Event Manually"
           >
-            <MessageSquare className="h-6 w-6 text-primary" />
+            <Plus className="h-6 w-6 text-primary" />
           </Button>
           <Button
             variant="outline"
             size="icon"
             className="rounded-full shadow-md w-14 h-14 bg-background"
             onClick={() => { setIsOpen(false); onTelegramClick(); }}
+            title="Link Telegram"
           >
             <Send className="h-6 w-6 text-primary" />
           </Button>
@@ -54,25 +54,10 @@ const QuickActions = ({ onAddEvent, onVoiceClick, onImageClick, onTextClick, onT
             variant="outline"
             size="icon"
             className="rounded-full shadow-md w-14 h-14 bg-background"
-            onClick={() => { setIsOpen(false); onImageClick(); }}
+            onClick={() => { setIsOpen(false); onChatClick(); }}
+            title="Chat with AI"
           >
-            <Image className="h-6 w-6 text-primary" />
-          </Button>
-          <Button
-            variant="outline"
-            size="icon"
-            className="rounded-full shadow-md w-14 h-14 bg-background"
-            onClick={() => { setIsOpen(false); onVoiceClick(); }}
-          >
-            <Mic className="h-6 w-6 text-primary" />
-          </Button>
-          <Button
-            variant="outline"
-            size="icon"
-            className="rounded-full shadow-md w-14 h-14 bg-background"
-            onClick={() => { setIsOpen(false); onAddEvent(); }}
-          >
-            <Plus className="h-6 w-6 text-primary" />
+            <MessageCircle className="h-6 w-6 text-primary" />
           </Button>
         </div>
       )}

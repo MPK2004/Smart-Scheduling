@@ -111,5 +111,6 @@ export const useEventManager = () => {
     addEvent,
     updateEvent,
     deleteEvent,
+    fetchEvents,
   };
 };
