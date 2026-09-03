@@ -30,8 +30,9 @@ A modern, responsive, and dynamic Event Scheduling application built with React,
 
 The "Smart" in Smart Scheduling is powered by a robust AI pipeline:
 
-- **Natural Language Processing:** Powered by Groq (Llama 3.1 8B) to extract titles, dates, times, and categories from unstructured text.
+- **Natural Language Processing:** Powered by Groq (GPT-OSS 20B/120B) to extract titles, dates, times, and categories from unstructured text.
 - **Voice Transcription:** Utilizes Groq Whisper (whisper-large-v3-turbo) for high-accuracy voice-to-text conversion.
+- **Image/Vision Parsing:** Uses Groq's Qwen3.6 27B vision model to read event details out of photos (flyers, notes, screenshots).
 - **Date Intelligence:** Combines LLM analysis with Chrono-node for precise, deterministic date and recurrence calculations.
 - **OCR (Optical Character Recognition):** Integrated with Tesseract.js to process images and extract textual event data.
 

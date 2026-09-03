@@ -361,7 +361,7 @@ serve(async (req: any) => {
             { type: "image_url", image_url: { url: `data:image/jpeg;base64,${file_data}` } },
           ]},
         ],
-        model: "meta-llama/llama-4-scout-17b-16e-instruct",
+        model: "qwen/qwen3.6-27b",
       });
       userMessage = visionCompletion.choices[0]?.message?.content || userMessage;
     }
@@ -391,7 +391,7 @@ serve(async (req: any) => {
       try {
         completion = await groq.chat.completions.create({
           messages,
-          model: "llama-3.3-70b-versatile",
+          model: "openai/gpt-oss-120b",
           tools: toolDefinitions,
           tool_choice: "auto",
           temperature: 0.2,
@@ -400,7 +400,7 @@ serve(async (req: any) => {
         console.error("Groq API error, retrying without tools:", apiErr.message);
         const fallback = await groq.chat.completions.create({
           messages,
-          model: "llama-3.3-70b-versatile",
+          model: "openai/gpt-oss-120b",
           temperature: 0.2,
         });
         finalResponse = fallback.choices[0]?.message?.content || "Sorry, I could not process that request.";
@@ -445,7 +445,7 @@ serve(async (req: any) => {
     if (!finalResponse && messages.length > 2) {
       const summary = await groq.chat.completions.create({
         messages: [...messages, { role: "user", content: "Summarize what you just did in one concise sentence." }],
-        model: "llama-3.3-70b-versatile",
+        model: "openai/gpt-oss-120b",
         temperature: 0.2,
       });
       finalResponse = summary.choices[0]?.message?.content || "Done.";
