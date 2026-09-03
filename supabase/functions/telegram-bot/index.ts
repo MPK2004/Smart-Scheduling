@@ -218,15 +218,12 @@ async function toolUpdateEvent(userId: string, args: any) {
     updateData.start_date = new Date(`${newDate}T${newTime}:00+05:30`).toISOString();
   }
 
-  await supabase.from('profiles')
-    .update({ pending_action: JSON.stringify({ type: 'update', event_id: existing.id, data: updateData, title: existing.title }) })
-    .eq('id', userId);
-
   return {
     requires_confirmation: true,
+    action: { type: 'update', event_id: existing.id, data: updateData, title: existing.title },
     event: { id: existing.id, title: existing.title },
     changes: updateData,
-    message: `Confirm this change with the user by briefly summarizing what will change. Confirm/Cancel buttons will be shown automatically - do not ask them to type yes/no.`,
+    message: `Not applied yet - pending confirmation. If updating multiple events, call update_event for each one; one combined confirmation is shown after you finish. Briefly summarize the change(s), do not ask the user to type yes/no.`,
   };
 }
 
@@ -235,14 +232,11 @@ async function toolDeleteEvent(userId: string, args: any) {
     .eq('id', args.event_id).eq('user_id', userId).single();
   if (!event) return { error: "Event not found" };
 
-  await supabase.from('profiles')
-    .update({ pending_action: JSON.stringify({ type: 'delete', event_id: event.id, title: event.title }) })
-    .eq('id', userId);
-
   return {
     requires_confirmation: true,
+    action: { type: 'delete', event_id: event.id, title: event.title },
     event: { id: event.id, title: event.title, date: event.start_date.split('T')[0], time: event.start_date.split('T')[1].substring(0, 5) },
-    message: `Ask the user to confirm deleting "${event.title}" by briefly stating what will be deleted. Confirm/Cancel buttons will be shown automatically - do not ask them to type yes/no.`,
+    message: `Not deleted yet - pending confirmation. If the user asked to delete multiple events, call delete_event for each one; one combined confirmation is shown after you finish all of them. Briefly state what will be deleted, do not ask the user to type yes/no.`,
   };
 }
 
@@ -384,6 +378,7 @@ async function runAgent(userId: string, userMessage: string, history: any[] = []
   let finalResponse = "";
   let needsConfirmation = false;
   let listedEvents: { id: string; title: string }[] = [];
+  let pendingActions: any[] = [];
 
   while (maxSteps--) {
     let completion;
@@ -431,7 +426,10 @@ async function runAgent(userId: string, userMessage: string, history: any[] = []
 
       console.log("Result:", JSON.stringify(result));
 
-      if (result?.requires_confirmation) needsConfirmation = true;
+      if (result?.requires_confirmation) {
+        needsConfirmation = true;
+        if (result.action) pendingActions.push(result.action);
+      }
       if (fnName === "get_events" && Array.isArray(result?.events) && result.events.length > 0) {
         listedEvents = result.events.map((e: any) => ({ id: e.id, title: e.title }));
       }
@@ -452,6 +450,12 @@ async function runAgent(userId: string, userMessage: string, history: any[] = []
       temperature: 0.2,
     });
     finalResponse = summary.choices[0]?.message?.content || "Done.";
+  }
+
+  if (pendingActions.length > 0) {
+    await supabase.from('profiles')
+      .update({ pending_action: JSON.stringify({ type: 'bulk', actions: pendingActions }) })
+      .eq('id', userId);
   }
 
   return { text: finalResponse, needsConfirmation, listedEvents };
@@ -603,17 +607,26 @@ async function handleCallbackQuery(cq: any) {
 
   if (data === 'confirm_action') {
     if (!profile.pending_action) { await answerCallbackQuery(cq.id, "Nothing pending."); return; }
-    const action = JSON.parse(profile.pending_action);
+    const pending = JSON.parse(profile.pending_action);
     await supabase.from('profiles').update({ pending_action: null }).eq('id', profile.id);
     await answerCallbackQuery(cq.id, "Done.");
 
-    if (action.type === 'delete') {
-      await supabase.from('events').delete().eq('id', action.event_id).eq('user_id', profile.id);
-      await sendTelegramMessage(chatId, `🗑️ Deleted *"${action.title}"*.`);
-    } else if (action.type === 'update') {
-      await supabase.from('events').update(action.data).eq('id', action.event_id).eq('user_id', profile.id);
-      await sendTelegramMessage(chatId, `✅ Updated *"${action.title}"*.`);
+    const actions: any[] = pending.type === 'bulk' ? pending.actions : [pending];
+    let deletedCount = 0, updatedCount = 0;
+    for (const action of actions) {
+      if (action.type === 'delete') {
+        const { error } = await supabase.from('events').delete().eq('id', action.event_id).eq('user_id', profile.id);
+        if (!error) deletedCount++;
+      } else if (action.type === 'update') {
+        const { error } = await supabase.from('events').update(action.data).eq('id', action.event_id).eq('user_id', profile.id);
+        if (!error) updatedCount++;
+      }
     }
+
+    const parts: string[] = [];
+    if (deletedCount > 0) parts.push(`🗑️ Deleted ${deletedCount} event${deletedCount > 1 ? 's' : ''}.`);
+    if (updatedCount > 0) parts.push(`✅ Updated ${updatedCount} event${updatedCount > 1 ? 's' : ''}.`);
+    await sendTelegramMessage(chatId, parts.join('\n') || "Done.");
     return;
   }
 
