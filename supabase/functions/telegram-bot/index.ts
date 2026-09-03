@@ -362,7 +362,7 @@ async function getTelegramFileUrl(fileId: string) {
   return `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${result.file_path}`;
 }
 
-type AgentResult = { text: string; needsConfirmation: boolean; listedEvents: { id: string; title: string }[] };
+type AgentResult = { text: string; needsConfirmation: boolean; listedEvents: { id: string; title: string }[]; pendingActions: any[] };
 
 async function runAgent(userId: string, userMessage: string, history: any[] = []): Promise<AgentResult> {
   const nowDate = new Date();
@@ -458,7 +458,7 @@ async function runAgent(userId: string, userMessage: string, history: any[] = []
       .eq('id', userId);
   }
 
-  return { text: finalResponse, needsConfirmation, listedEvents };
+  return { text: finalResponse, needsConfirmation, listedEvents, pendingActions };
 }
 
 async function handleMessage(message: any) {
@@ -538,7 +538,18 @@ async function handleMessage(message: any) {
     const agentResult = await runAgent(profile.id, userMessage, history);
 
     let replyMarkup: any = undefined;
+    let replyText = agentResult.text || "Done.";
+
     if (agentResult.needsConfirmation) {
+      // Don't trust the model's own wording here - it has claimed things were
+      // already done when they weren't. Build the confirmation from the
+      // actual pending actions instead, so it can never misreport reality.
+      const lines = agentResult.pendingActions.map(a => {
+        if (a.type === 'delete') return `🗑️ Delete: ${a.title}`;
+        if (a.type === 'update') return `✏️ Update: ${a.title}`;
+        return null;
+      }).filter(Boolean);
+      replyText = `Nothing has changed yet. Confirm to proceed:\n\n${lines.join('\n')}`;
       replyMarkup = { inline_keyboard: [[
         { text: "✅ Confirm", callback_data: "confirm_action" },
         { text: "❌ Cancel", callback_data: "cancel_action" },
@@ -551,10 +562,10 @@ async function handleMessage(message: any) {
       };
     }
 
-    await sendTelegramMessage(chatId, agentResult.text || "Done.", replyMarkup);
+    await sendTelegramMessage(chatId, replyText, replyMarkup);
 
     history.push({ role: "user", content: userMessage });
-    history.push({ role: "assistant", content: agentResult.text });
+    history.push({ role: "assistant", content: replyText });
     if (history.length > 6) history = history.slice(-6);
 
     await supabase.from('profiles').update({ conversation_history: JSON.stringify(history) }).eq('id', profile.id);
