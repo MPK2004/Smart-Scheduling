@@ -331,10 +331,14 @@ CONTEXT:
 - Be concise. Give direct answers.`;
 }
 
-async function sendTelegramMessage(chatId: number, text: string, replyMarkup?: any) {
+// Every message sent through here is scheduled for auto-deletion in a few
+// minutes (swept by send-notifications' cron tick) to keep the chat clean.
+// Buttons that get tapped delete their own message immediately instead -
+// see deleteTelegramMessage below.
+async function sendTelegramMessage(chatId: number, text: string, replyMarkup?: any): Promise<number | null> {
   if (!TELEGRAM_BOT_TOKEN) {
     console.error("sendTelegramMessage: TELEGRAM_BOT_TOKEN is not set");
-    return;
+    return null;
   }
   const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: 'POST',
@@ -343,7 +347,23 @@ async function sendTelegramMessage(chatId: number, text: string, replyMarkup?: a
   });
   if (!res.ok) {
     console.error("sendTelegramMessage failed:", res.status, await res.text());
+    return null;
   }
+  const body = await res.json();
+  const messageId = body?.result?.message_id;
+  if (messageId) {
+    await supabase.from('telegram_pending_deletes').insert({ chat_id: chatId, message_id: messageId });
+  }
+  return messageId ?? null;
+}
+
+async function deleteTelegramMessage(chatId: number, messageId: number) {
+  await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/deleteMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId, message_id: messageId }),
+  });
+  await supabase.from('telegram_pending_deletes').delete().eq('chat_id', chatId).eq('message_id', messageId);
 }
 
 function bufferToBase64(buffer: ArrayBuffer): string {
@@ -591,6 +611,7 @@ async function answerCallbackQuery(id: string, text?: string) {
 //   pending (set here, or by toolDeleteEvent/toolUpdateEvent via chat).
 async function handleCallbackQuery(cq: any) {
   const chatId = cq.message?.chat?.id;
+  const messageId = cq.message?.message_id;
   const data = cq.data as string;
   if (!chatId || !data) { await answerCallbackQuery(cq.id); return; }
 
@@ -607,6 +628,7 @@ async function handleCallbackQuery(cq: any) {
       .eq('id', profile.id);
 
     await answerCallbackQuery(cq.id);
+    if (messageId) await deleteTelegramMessage(chatId, messageId);
     await sendTelegramMessage(chatId, `Delete *"${event.title}"*?`, {
       inline_keyboard: [[
         { text: "✅ Confirm", callback_data: "confirm_action" },
@@ -621,6 +643,7 @@ async function handleCallbackQuery(cq: any) {
     const pending = JSON.parse(profile.pending_action);
     await supabase.from('profiles').update({ pending_action: null }).eq('id', profile.id);
     await answerCallbackQuery(cq.id, "Done.");
+    if (messageId) await deleteTelegramMessage(chatId, messageId);
 
     const actions: any[] = pending.type === 'bulk' ? pending.actions : [pending];
     let deletedCount = 0, updatedCount = 0;
@@ -644,6 +667,7 @@ async function handleCallbackQuery(cq: any) {
   if (data === 'cancel_action') {
     await supabase.from('profiles').update({ pending_action: null }).eq('id', profile.id);
     await answerCallbackQuery(cq.id, "Cancelled.");
+    if (messageId) await deleteTelegramMessage(chatId, messageId);
     await sendTelegramMessage(chatId, "Cancelled.");
     return;
   }

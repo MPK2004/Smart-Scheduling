@@ -98,7 +98,33 @@ serve(async (req) => {
       }
     }
 
-    return new Response(JSON.stringify({ ok: true, sent: sentCount }), {
+    // Sweep bot messages scheduled for auto-deletion (see sendTelegramMessage
+    // in telegram-bot) - keeps the chat clean without needing a background
+    // timer, since this function already runs every minute via cron.
+    let cleanedCount = 0;
+    const { data: dueDeletes } = await supabase
+      .from('telegram_pending_deletes')
+      .select('*')
+      .lte('delete_at', new Date().toISOString())
+      .limit(200);
+
+    if (dueDeletes) {
+      for (const row of dueDeletes) {
+        try {
+          await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/deleteMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: row.chat_id, message_id: row.message_id }),
+          });
+          cleanedCount++;
+        } catch (err) {
+          console.error(`Failed to clean up message ${row.message_id}:`, err);
+        }
+        await supabase.from('telegram_pending_deletes').delete().eq('id', row.id);
+      }
+    }
+
+    return new Response(JSON.stringify({ ok: true, sent: sentCount, cleaned: cleanedCount }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       status: 200
     });
