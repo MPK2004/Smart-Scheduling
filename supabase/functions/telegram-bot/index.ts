@@ -8,6 +8,7 @@ const TELEGRAM_BOT_TOKEN = Deno.env.get("TELEGRAM_BOT_TOKEN");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY")!;
+const WEB_APP_URL = "https://smart-scheduling.vercel.app/";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 const groq = new Groq({ apiKey: GROQ_API_KEY });
@@ -75,12 +76,11 @@ const toolDefinitions = [
     type: "function" as const,
     function: {
       name: "delete_event",
-      description: "Delete event. Returns details first. Pass confirmed=true to confirm.",
+      description: "Delete event by event_id. A confirmation button is shown to the user automatically - do not ask them to confirm in text first.",
       parameters: {
         type: "object",
         properties: {
           event_id: { type: "string" },
-          confirmed: { type: "boolean" },
         },
         required: ["event_id"],
       },
@@ -203,13 +203,14 @@ async function toolGetEvents(userId: string, args: any) {
 }
 
 async function toolUpdateEvent(userId: string, args: any) {
+  const { data: existing } = await supabase.from('events').select('*').eq('id', args.event_id).eq('user_id', userId).single();
+  if (!existing) return { error: "Event not found" };
+
   const updateData: any = {};
   if (args.title) updateData.title = args.title;
   if (args.description) updateData.description = args.description;
   if (args.category) updateData.category = args.category;
   if (args.date || args.time) {
-    const { data: existing } = await supabase.from('events').select('start_date').eq('id', args.event_id).single();
-    if (!existing) return { error: "Event not found" };
     const curDate = existing.start_date.split('T')[0];
     const curTime = existing.start_date.split('T')[1].substring(0, 5);
     const newDate = args.date || curDate;
@@ -217,12 +218,15 @@ async function toolUpdateEvent(userId: string, args: any) {
     updateData.start_date = new Date(`${newDate}T${newTime}:00+05:30`).toISOString();
   }
 
-  const { data, error } = await supabase.from('events').update(updateData)
-    .eq('id', args.event_id).eq('user_id', userId).select().single();
-  if (error) return { error: error.message };
+  await supabase.from('profiles')
+    .update({ pending_action: JSON.stringify({ type: 'update', event_id: existing.id, data: updateData, title: existing.title }) })
+    .eq('id', userId);
+
   return {
-    updated: true,
-    event: { id: data.id, title: data.title, date: data.start_date.split('T')[0], time: data.start_date.split('T')[1].substring(0, 5) },
+    requires_confirmation: true,
+    event: { id: existing.id, title: existing.title },
+    changes: updateData,
+    message: `Confirm this change with the user by briefly summarizing what will change. Confirm/Cancel buttons will be shown automatically - do not ask them to type yes/no.`,
   };
 }
 
@@ -231,17 +235,15 @@ async function toolDeleteEvent(userId: string, args: any) {
     .eq('id', args.event_id).eq('user_id', userId).single();
   if (!event) return { error: "Event not found" };
 
-  if (!args.confirmed) {
-    return {
-      requires_confirmation: true,
-      event: { id: event.id, title: event.title, date: event.start_date.split('T')[0], time: event.start_date.split('T')[1].substring(0, 5) },
-      message: `Are you sure you want to delete "${event.title}" on ${event.start_date.split('T')[0]}?`,
-    };
-  }
+  await supabase.from('profiles')
+    .update({ pending_action: JSON.stringify({ type: 'delete', event_id: event.id, title: event.title }) })
+    .eq('id', userId);
 
-  const { error } = await supabase.from('events').delete().eq('id', args.event_id).eq('user_id', userId);
-  if (error) return { error: error.message };
-  return { deleted: true, title: event.title };
+  return {
+    requires_confirmation: true,
+    event: { id: event.id, title: event.title, date: event.start_date.split('T')[0], time: event.start_date.split('T')[1].substring(0, 5) },
+    message: `Ask the user to confirm deleting "${event.title}" by briefly stating what will be deleted. Confirm/Cancel buttons will be shown automatically - do not ask them to type yes/no.`,
+  };
 }
 
 async function toolAnalyzeSchedule(userId: string, args: any) {
@@ -366,7 +368,9 @@ async function getTelegramFileUrl(fileId: string) {
   return `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${result.file_path}`;
 }
 
-async function runAgent(userId: string, userMessage: string, history: any[] = []): Promise<string> {
+type AgentResult = { text: string; needsConfirmation: boolean; listedEvents: { id: string; title: string }[] };
+
+async function runAgent(userId: string, userMessage: string, history: any[] = []): Promise<AgentResult> {
   const nowDate = new Date();
   const todayStr = nowDate.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
   const timeStr = nowDate.toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false });
@@ -378,6 +382,8 @@ async function runAgent(userId: string, userMessage: string, history: any[] = []
 
   let maxSteps = 5;
   let finalResponse = "";
+  let needsConfirmation = false;
+  let listedEvents: { id: string; title: string }[] = [];
 
   while (maxSteps--) {
     let completion;
@@ -425,6 +431,11 @@ async function runAgent(userId: string, userMessage: string, history: any[] = []
 
       console.log("Result:", JSON.stringify(result));
 
+      if (result?.requires_confirmation) needsConfirmation = true;
+      if (fnName === "get_events" && Array.isArray(result?.events) && result.events.length > 0) {
+        listedEvents = result.events.map((e: any) => ({ id: e.id, title: e.title }));
+      }
+
       messages.push({
         role: "tool",
         tool_call_id: toolCall.id,
@@ -443,7 +454,7 @@ async function runAgent(userId: string, userMessage: string, history: any[] = []
     finalResponse = summary.choices[0]?.message?.content || "Done.";
   }
 
-  return finalResponse;
+  return { text: finalResponse, needsConfirmation, listedEvents };
 }
 
 async function handleMessage(message: any) {
@@ -457,11 +468,19 @@ async function handleMessage(message: any) {
       const code = parts.length > 1 ? parts[1] : null;
       if (code && !code.includes('@')) {
         const { data: userData } = await supabase.from('profiles').update({ telegram_chat_id: chatId, link_code: null }).eq('link_code', code.trim().toUpperCase()).select('username').single();
-        if (userData) return await sendTelegramMessage(chatId, `Linked! Welcome @${userData.username}.\n\nYou can now send me events like:\n- "Lunch with Sarah tomorrow at 1pm"\n- Send a voice note\n- Send a photo of a flyer`);
+        if (userData) {
+          return await sendTelegramMessage(
+            chatId,
+            `Linked! Welcome @${userData.username}.\n\nYou can now send me events like:\n- "Lunch with Sarah tomorrow at 1pm"\n- Send a voice note\n- Send a photo of a flyer`,
+            { inline_keyboard: [[{ text: "🌐 Open Web App", url: WEB_APP_URL }]] },
+          );
+        }
       }
-      return await sendTelegramMessage(chatId, "Welcome! Send /link YOUR-CODE from the web app.");
+      return await sendTelegramMessage(chatId, "Welcome! Send /link YOUR-CODE from the web app.",
+        { inline_keyboard: [[{ text: "🌐 Open Web App", url: WEB_APP_URL }]] });
     }
-    return await sendTelegramMessage(chatId, "Not linked. Send /link YOUR-CODE.");
+    return await sendTelegramMessage(chatId, "Not linked. Send /link YOUR-CODE.",
+      { inline_keyboard: [[{ text: "🌐 Open Web App", url: WEB_APP_URL }]] });
   }
 
   let userMessage = "";
@@ -512,11 +531,26 @@ async function handleMessage(message: any) {
   } catch { history = []; }
 
   try {
-    const agentResponse = await runAgent(profile.id, userMessage, history);
-    await sendTelegramMessage(chatId, agentResponse || "Done.");
+    const agentResult = await runAgent(profile.id, userMessage, history);
+
+    let replyMarkup: any = undefined;
+    if (agentResult.needsConfirmation) {
+      replyMarkup = { inline_keyboard: [[
+        { text: "✅ Confirm", callback_data: "confirm_action" },
+        { text: "❌ Cancel", callback_data: "cancel_action" },
+      ]] };
+    } else if (agentResult.listedEvents.length > 0) {
+      replyMarkup = {
+        inline_keyboard: agentResult.listedEvents.slice(0, 8).map(e => [
+          { text: `🗑️ ${e.title.slice(0, 30)}`, callback_data: `delrequest:${e.id}` },
+        ]),
+      };
+    }
+
+    await sendTelegramMessage(chatId, agentResult.text || "Done.", replyMarkup);
 
     history.push({ role: "user", content: userMessage });
-    history.push({ role: "assistant", content: agentResponse });
+    history.push({ role: "assistant", content: agentResult.text });
     if (history.length > 6) history = history.slice(-6);
 
     await supabase.from('profiles').update({ conversation_history: JSON.stringify(history) }).eq('id', profile.id);
@@ -526,11 +560,79 @@ async function handleMessage(message: any) {
   }
 }
 
+async function answerCallbackQuery(id: string, text?: string) {
+  const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ callback_query_id: id, text }),
+  });
+  if (!res.ok) console.error("answerCallbackQuery failed:", res.status, await res.text());
+}
+
+// Handles inline button taps. Two kinds of buttons exist:
+// - "delrequest:<id>" (from an event list or a reminder): starts a delete
+//   confirmation by stashing it in profiles.pending_action.
+// - "confirm_action" / "cancel_action": resolves whatever is currently
+//   pending (set here, or by toolDeleteEvent/toolUpdateEvent via chat).
+async function handleCallbackQuery(cq: any) {
+  const chatId = cq.message?.chat?.id;
+  const data = cq.data as string;
+  if (!chatId || !data) { await answerCallbackQuery(cq.id); return; }
+
+  const { data: profile } = await supabase.from('profiles').select('id, pending_action').eq('telegram_chat_id', chatId).single();
+  if (!profile) { await answerCallbackQuery(cq.id, "Not linked."); return; }
+
+  if (data.startsWith('delrequest:')) {
+    const eventId = data.slice('delrequest:'.length);
+    const { data: event } = await supabase.from('events').select('id,title').eq('id', eventId).eq('user_id', profile.id).single();
+    if (!event) { await answerCallbackQuery(cq.id, "Event not found."); return; }
+
+    await supabase.from('profiles')
+      .update({ pending_action: JSON.stringify({ type: 'delete', event_id: event.id, title: event.title }) })
+      .eq('id', profile.id);
+
+    await answerCallbackQuery(cq.id);
+    await sendTelegramMessage(chatId, `Delete *"${event.title}"*?`, {
+      inline_keyboard: [[
+        { text: "✅ Confirm", callback_data: "confirm_action" },
+        { text: "❌ Cancel", callback_data: "cancel_action" },
+      ]],
+    });
+    return;
+  }
+
+  if (data === 'confirm_action') {
+    if (!profile.pending_action) { await answerCallbackQuery(cq.id, "Nothing pending."); return; }
+    const action = JSON.parse(profile.pending_action);
+    await supabase.from('profiles').update({ pending_action: null }).eq('id', profile.id);
+    await answerCallbackQuery(cq.id, "Done.");
+
+    if (action.type === 'delete') {
+      await supabase.from('events').delete().eq('id', action.event_id).eq('user_id', profile.id);
+      await sendTelegramMessage(chatId, `🗑️ Deleted *"${action.title}"*.`);
+    } else if (action.type === 'update') {
+      await supabase.from('events').update(action.data).eq('id', action.event_id).eq('user_id', profile.id);
+      await sendTelegramMessage(chatId, `✅ Updated *"${action.title}"*.`);
+    }
+    return;
+  }
+
+  if (data === 'cancel_action') {
+    await supabase.from('profiles').update({ pending_action: null }).eq('id', profile.id);
+    await answerCallbackQuery(cq.id, "Cancelled.");
+    await sendTelegramMessage(chatId, "Cancelled.");
+    return;
+  }
+
+  await answerCallbackQuery(cq.id);
+}
+
 serve(async (req: any) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   try {
     const update = await req.json();
     if (update.message) await handleMessage(update.message);
+    else if (update.callback_query) await handleCallbackQuery(update.callback_query);
     return new Response(JSON.stringify({ ok: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 });
   } catch (error: any) {
     console.error("Update Error:", error);

@@ -18,62 +18,96 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+async function sendTelegramMessage(chatId: number, text: string, replyMarkup?: any) {
+  const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown', reply_markup: replyMarkup }),
+  });
+  if (!res.ok) console.error("sendTelegramMessage failed:", res.status, await res.text());
+}
+
+// Three reminder stages per event: 2 days before, 1 day before, and at the
+// exact start time. Each has its own "already sent" column so they fire
+// independently and exactly once.
+type Stage = {
+  column: 'notified_2d' | 'notified_1d' | 'notified';
+  windowEndOffsetMs: number;
+  buildText: (title: string, dateStr: string, timeStr: string) => string;
+  withDeleteButton: boolean;
+};
+
+const stages: Stage[] = [
+  {
+    column: 'notified_2d',
+    windowEndOffsetMs: 2 * 24 * 60 * 60 * 1000,
+    buildText: (title, dateStr, timeStr) => `📅 *Upcoming Reminder*\n\n*${title}*\nis in 2 days, on ${dateStr} at ${timeStr}`,
+    withDeleteButton: true,
+  },
+  {
+    column: 'notified_1d',
+    windowEndOffsetMs: 24 * 60 * 60 * 1000,
+    buildText: (title, dateStr, timeStr) => `📅 *Upcoming Reminder*\n\n*${title}*\nis tomorrow, ${dateStr} at ${timeStr}`,
+    withDeleteButton: true,
+  },
+  {
+    column: 'notified',
+    windowEndOffsetMs: 0,
+    buildText: (title, _dateStr, timeStr) => `🔔 *Reminder!*\n\n*${title}*\n⏰ Current Time reached (${timeStr})`,
+    withDeleteButton: false,
+  },
+];
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
-  
+
   try {
-    const now = new Date().toISOString();
-    
-    // We want events whose start_date is in the past or exactly now, and that haven't been notified yet
-    // Example: if start_date is 09:00:00, and it's currently 09:00:15, it should trigger.
-    const { data: events, error: fetchError } = await supabase
-      .from('events')
-      .select('*, profiles!events_user_id_fkey(telegram_chat_id)')
-      .eq('notified', false)
-      .lte('start_date', now);
-
-    if (fetchError) throw fetchError;
-    if (!events || events.length === 0) {
-      return new Response(JSON.stringify({ ok: true, message: "No pending notifications." }), { 
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }, 
-        status: 200 
-      });
-    }
-
     let sentCount = 0;
-    
-    for (const event of events) {
-      const chatId = event.profiles?.telegram_chat_id;
-      if (!chatId) continue; // Skip if user hasn't linked Telegram
 
-      const timeStr = new Date(event.start_date).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false });
-      const text = `🔔 *Reminder!*\n\n*${event.title}*\n⏰ Current Time reached (${timeStr})`;
-      
-      try {
-        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown' }),
-        });
-        
-        // Mark as notified so we don't spam them every minute
-        await supabase.from('events').update({ notified: true }).eq('id', event.id);
-        sentCount++;
-      } catch (err) {
-        console.error(`Failed to send notification for event ${event.id}:`, err);
+    for (const stage of stages) {
+      const threshold = new Date(Date.now() + stage.windowEndOffsetMs).toISOString();
+
+      const { data: events, error: fetchError } = await supabase
+        .from('events')
+        .select('*, profiles!events_user_id_fkey(telegram_chat_id)')
+        .eq(stage.column, false)
+        .lte('start_date', threshold);
+
+      if (fetchError) throw fetchError;
+      if (!events || events.length === 0) continue;
+
+      for (const event of events) {
+        const chatId = event.profiles?.telegram_chat_id;
+        if (!chatId) continue; // Skip if user hasn't linked Telegram
+
+        const startDate = new Date(event.start_date);
+        const dateStr = startDate.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+        const timeStr = startDate.toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false });
+        const text = stage.buildText(event.title, dateStr, timeStr);
+        const replyMarkup = stage.withDeleteButton
+          ? { inline_keyboard: [[{ text: "🗑️ Delete Event", callback_data: `delrequest:${event.id}` }]] }
+          : undefined;
+
+        try {
+          await sendTelegramMessage(chatId, text, replyMarkup);
+          await supabase.from('events').update({ [stage.column]: true }).eq('id', event.id);
+          sentCount++;
+        } catch (err) {
+          console.error(`Failed to send ${stage.column} notification for event ${event.id}:`, err);
+        }
       }
     }
 
-    return new Response(JSON.stringify({ ok: true, sent: sentCount }), { 
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }, 
-      status: 200 
+    return new Response(JSON.stringify({ ok: true, sent: sentCount }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      status: 200
     });
 
   } catch (error: any) {
     console.error("Notification Engine Error:", error);
-    return new Response(JSON.stringify({ error: error.message }), { 
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }, 
-      status: 500 
+    return new Response(JSON.stringify({ error: error.message }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      status: 500
     });
   }
 });
