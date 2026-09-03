@@ -1,4 +1,4 @@
-project_id = "pdcimvqzzpprkwuqbxnr"
+project_id = "gtoqpgljntwqcqrbqhtf"
 
 [functions.analyze-event]
 verify_jwt = false
