@@ -309,8 +309,10 @@ async function executeTool(userId: string, toolName: string, args: any): Promise
   }
 }
 
-function buildSystemPrompt(todayStr: string) {
-  return `You are Maantis, a scheduling agent on Telegram. Today is ${todayStr}. Year is ${todayStr.split('-')[0]}.
+function buildSystemPrompt(todayStr: string, timeStr: string) {
+  return `You are Maantis, a scheduling agent on Telegram. Today is ${todayStr}. The current time right now is ${timeStr} (24h). Year is ${todayStr.split('-')[0]}.
+
+For relative times ("in 5 minutes", "in an hour", "tonight"), compute the target time yourself by adding the offset to the current time above. NEVER ask the user what time it is - you already know.
 
 You have FULL access to the user's calendar via tools. Act immediately.
 
@@ -354,9 +356,11 @@ async function getTelegramFileUrl(fileId: string) {
 }
 
 async function runAgent(userId: string, userMessage: string, history: any[] = []): Promise<string> {
-  const todayStr = new Date().toLocaleDateString('en-CA');
+  const nowDate = new Date();
+  const todayStr = nowDate.toLocaleDateString('en-CA');
+  const timeStr = nowDate.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
   const messages: any[] = [
-    { role: "system", content: buildSystemPrompt(todayStr) },
+    { role: "system", content: buildSystemPrompt(todayStr, timeStr) },
     ...history,
     { role: "user", content: userMessage },
   ];
