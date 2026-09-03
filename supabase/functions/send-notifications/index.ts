@@ -46,7 +46,7 @@ serve(async (req) => {
       const chatId = event.profiles?.telegram_chat_id;
       if (!chatId) continue; // Skip if user hasn't linked Telegram
 
-      const timeStr = event.start_date.split('T')[1]?.substring(0, 5) || '00:00';
+      const timeStr = new Date(event.start_date).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false });
       const text = `🔔 *Reminder!*\n\n*${event.title}*\n⏰ Current Time reached (${timeStr})`;
       
       try {
