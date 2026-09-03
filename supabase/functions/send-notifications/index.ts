@@ -28,7 +28,7 @@ serve(async (req) => {
     // Example: if start_date is 09:00:00, and it's currently 09:00:15, it should trigger.
     const { data: events, error: fetchError } = await supabase
       .from('events')
-      .select('*, profiles(telegram_chat_id)')
+      .select('*, profiles!events_user_id_fkey(telegram_chat_id)')
       .eq('notified', false)
       .lte('start_date', now);
 
