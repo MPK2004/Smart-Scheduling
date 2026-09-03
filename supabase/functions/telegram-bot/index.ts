@@ -333,11 +333,18 @@ CONTEXT:
 }
 
 async function sendTelegramMessage(chatId: number, text: string, replyMarkup?: any) {
-  await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+  if (!TELEGRAM_BOT_TOKEN) {
+    console.error("sendTelegramMessage: TELEGRAM_BOT_TOKEN is not set");
+    return;
+  }
+  const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown', reply_markup: replyMarkup }),
   });
+  if (!res.ok) {
+    console.error("sendTelegramMessage failed:", res.status, await res.text());
+  }
 }
 
 async function getTelegramFileUrl(fileId: string) {
