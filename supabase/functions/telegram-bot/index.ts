@@ -350,6 +350,16 @@ async function sendTelegramMessage(chatId: number, text: string, replyMarkup?: a
   }
 }
 
+function bufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 8192;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
 async function getTelegramFileUrl(fileId: string) {
   const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getFile?file_id=${fileId}`);
   const { result } = await res.json();
@@ -476,7 +486,7 @@ async function handleMessage(message: any) {
       const fileUrl = await getTelegramFileUrl(fileId);
       const response = await fetch(fileUrl);
       const buffer = await response.arrayBuffer();
-      const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+      const base64 = bufferToBase64(buffer);
 
       const visionCompletion = await groq.chat.completions.create({
         messages: [
