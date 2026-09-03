@@ -11,3 +11,8 @@ create table if not exists public.telegram_pending_deletes (
 );
 
 create index if not exists idx_telegram_pending_deletes_due on public.telegram_pending_deletes (delete_at);
+
+-- Internal bookkeeping only, touched exclusively by edge functions via the
+-- service role key - never meant to be reachable through the public REST
+-- API, so lock it down with no anon/authenticated policies.
+alter table public.telegram_pending_deletes enable row level security;
