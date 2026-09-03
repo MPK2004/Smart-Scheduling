@@ -459,29 +459,39 @@ async function handleMessage(message: any) {
   if (message.text) {
     userMessage = message.text;
   } else if (message.voice) {
-    const fileUrl = await getTelegramFileUrl(message.voice.file_id);
-    const response = await fetch(fileUrl);
-    const buffer = await response.arrayBuffer();
-    const file = new File([buffer], "voice.ogg", { type: "audio/ogg" });
-    const transcription = await groq.audio.transcriptions.create({ file, model: "whisper-large-v3-turbo" });
-    userMessage = transcription.text;
+    try {
+      const fileUrl = await getTelegramFileUrl(message.voice.file_id);
+      const response = await fetch(fileUrl);
+      const buffer = await response.arrayBuffer();
+      const file = new File([buffer], "voice.ogg", { type: "audio/ogg" });
+      const transcription = await groq.audio.transcriptions.create({ file, model: "whisper-large-v3-turbo" });
+      userMessage = transcription.text;
+    } catch (err: any) {
+      console.error("Voice transcription error:", err);
+      return await sendTelegramMessage(chatId, "Sorry, I couldn't process that voice note: " + err.message);
+    }
   } else if (message.photo) {
-    const fileId = message.photo[message.photo.length - 1].file_id;
-    const fileUrl = await getTelegramFileUrl(fileId);
-    const response = await fetch(fileUrl);
-    const buffer = await response.arrayBuffer();
-    const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+    try {
+      const fileId = message.photo[message.photo.length - 1].file_id;
+      const fileUrl = await getTelegramFileUrl(fileId);
+      const response = await fetch(fileUrl);
+      const buffer = await response.arrayBuffer();
+      const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
 
-    const visionCompletion = await groq.chat.completions.create({
-      messages: [
-        { role: "user", content: [
-          { type: "text", text: `Extract any event details from this image. ${message.caption || ""}` },
-          { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64}` } },
-        ]},
-      ],
-      model: "qwen/qwen3.6-27b",
-    });
-    userMessage = visionCompletion.choices[0]?.message?.content || message.caption || "";
+      const visionCompletion = await groq.chat.completions.create({
+        messages: [
+          { role: "user", content: [
+            { type: "text", text: `Extract any event details from this image. ${message.caption || ""}` },
+            { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64}` } },
+          ]},
+        ],
+        model: "qwen/qwen3.6-27b",
+      });
+      userMessage = visionCompletion.choices[0]?.message?.content || message.caption || "";
+    } catch (err: any) {
+      console.error("Vision processing error:", err);
+      return await sendTelegramMessage(chatId, "Sorry, I couldn't process that image: " + err.message);
+    }
   }
 
   if (!userMessage.trim()) return;
