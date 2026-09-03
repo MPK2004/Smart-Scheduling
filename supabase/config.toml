@@ -2,6 +2,8 @@ project_id = "gtoqpgljntwqcqrbqhtf"
 
 [functions.analyze-event]
 verify_jwt = false
+[functions.telegram-bot]
+verify_jwt = false
 [functions.send-notifications]
 enabled = true
 verify_jwt = false
